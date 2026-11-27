@@ -88,7 +88,7 @@ test('the flow: empty list, create, get, review, ready, rename, delete', async (
   const reviewed = await call('PATCH', '/systems/acme', { review: { section: 'overview', state: 'looks-good' } });
   assert.equal(reviewed.status, 200);
   const ready = (await call('PATCH', '/systems/acme', { status: 'ready' })).json as PatchSystemResponse;
-  assert.deepEqual(ready.readyNote, { unreviewed: 11 });
+  assert.deepEqual(ready.readyNote, { unreviewed: 12 });
   assert.equal(ready.system.status, 'ready');
 
   const renamed = (await call('PATCH', '/systems/acme', { name: 'Acme Brand' })).json as PatchSystemResponse;

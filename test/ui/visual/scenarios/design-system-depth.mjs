@@ -4,6 +4,7 @@
 // scope block, the Pairs group under Colours (ratio, "Measured by the check", the too-low word, the automatic ones), the Sizes
 // chips beside Variants and States, and the new pattern and brand kind labels. DC_SYSDEPTH_ONLY=<tag regex> limits the variants.
 
+const FAKE = 'window.frames[0].__dcFake';
 const text = (p, selector) => p.guest(`return (doc.querySelector(${JSON.stringify(selector)})?.textContent ?? '').replace(/\\s+/g, ' ').trim()`);
 const count = (p, selector) => p.guest(`return doc.querySelectorAll(${JSON.stringify(selector)}).length`);
 const noOverflow = (p) => p.guest('return doc.documentElement.scrollWidth <= doc.documentElement.clientWidth');
@@ -143,6 +144,86 @@ const olderFlow = async (h, surface, width, theme) => {
   await p.close();
 };
 
+const openSection = async (p, area, section) => {
+  const open = await p.guest(`const row = doc.querySelector('${ROW(section)}'); return !!row && !row.closest('[hidden]')`);
+  if (!open) await p.click(`.dc-syspg-area[data-area="${area}"] .dc-syspg-area-head`);
+  await p.click(ROW(section));
+  await p.settle(250);
+};
+const rowText = (p, section) => text(p, `${ROW(section)} .dc-syspg-row-count`);
+
+/** Harbor on the page: motion tokens with their kinds, icons as pictures in <img>, the rail's counts. */
+const motionIconsFlow = async (h, surface, width, theme) => {
+  const rail = surface === 'panel';
+  const tag = `sysdepth-motion-${surfaceName(surface)}-${width}-${theme}`;
+  const p = await h.openPage({ width, height: 900, surface, theme, label: tag });
+  console.log(tag);
+  await h.listReady(p);
+  await openSystem(h, p, surface, 'harbor', tag);
+  const listed = await rowText(p, 'motion');
+  h.check(listed.includes('2 durations') || listed.includes('motion values'), `${tag}: the Motion row counts its tokens (${listed.slice(0, 200)})`);
+  if (!rail) {
+    await openSection(p, 'foundations', 'motion');
+    const kinds = await p.guest('return [...doc.querySelectorAll(".dc-sp-kind")].map((n) => n.textContent).join("|")');
+    h.check(kinds === 'Duration|Duration|Easing|Easing', `${tag}: each plain value says its kind, a formula none (${kinds})`);
+    const labels = await p.guest('return [...new Set([...doc.querySelectorAll(".dc-sp-section .dc-sp-label")].map((n) => n.textContent))].join("|")');
+    h.check(labels === 'Value|Note', `${tag}: a single value is labelled Value (${labels})`);
+    await reveal(p, '.dc-sp-section');
+    await p.shot(`${tag}-1-motion`);
+
+    await openSection(p, 'brand', 'assets');
+    await h.checkSoon(() => p.guest('return doc.querySelectorAll(".dc-sp-icon").length === 4'), `${tag}: four icons are drawn`);
+    const only = await p.guest('const tiles = [...doc.querySelectorAll(".dc-sp-icon-tile")]; return tiles.length === 5 && doc.querySelectorAll(".dc-sp-icon-tile svg").length === 0 && [...doc.querySelectorAll(".dc-sp-icon")].every((n) => n.tagName === "IMG" && n.src.startsWith("data:image/svg+xml;base64,"))');
+    h.check(only, `${tag}: every picture is an <img> of a data URL and no svg is inlined`);
+    const natural = await p.guest('return [...doc.querySelectorAll(".dc-sp-icon")].every((n) => n.naturalWidth > 0)');
+    h.check(natural, `${tag}: the pictures load under the page's policy`);
+    h.check((await text(p, '.dc-sp-group[aria-label="Icons"]')).includes('No picture'), `${tag}: an icon without a picture says so`);
+    await reveal(p, '.dc-sp-group[aria-label="Icons"]');
+    await p.shot(`${tag}-2-icons`);
+    await p.guest('const n = doc.querySelector(".dc-sp-group + .dc-sp-group"); n?.scrollIntoView({ block: "end" }); return true');
+    await p.settle(150);
+    await p.shot(`${tag}-3-fonts`);
+  } else {
+    await openSection(p, 'brand', 'assets');
+    h.check((await rowText(p, 'assets')) === '5 icons, 1 file', `${tag}: the Assets row counts icons apart from files (${await rowText(p, 'assets')})`);
+    await reveal(p, '.dc-syspg-area[data-area="brand"]');
+  }
+  h.check(await noOverflow(p), `${tag}: nothing scrolls sideways`);
+  await p.shot(`${tag}-4-end`);
+  await p.close();
+};
+
+/** Tidepool has no motion tokens and no icons; a board that fails says so and offers another try. */
+const motionIconsEmptyFlow = async (h, theme) => {
+  const tag = `sysdepth-motion-empty-page-1400-${theme}`;
+  const p = await h.openPage({ width: 1400, height: 900, surface: 'page', theme, label: tag });
+  console.log(tag);
+  await h.listReady(p);
+  await openSystem(h, p, 'page', 'tidepool', tag);
+  await openSection(p, 'foundations', 'motion');
+  h.check((await text(p, '.dc-sp-section')).includes('No motion tokens yet.'), `${tag}: the Motion section says it has none`);
+  await p.shot(`${tag}-1-motion`);
+  await openSection(p, 'brand', 'assets');
+  h.check((await text(p, '.dc-sp-section')).includes('No icons yet.'), `${tag}: Assets says it has no icons`);
+  await p.shot(`${tag}-2-icons`);
+  await p.close();
+
+  const failTag = `sysdepth-icons-error-page-1400-${theme}`;
+  const q = await h.openPage({ width: 1400, height: 900, surface: 'page', theme, label: failTag });
+  console.log(failTag);
+  await h.listReady(q);
+  await q.host(`${FAKE}.systems.failBoard(true)`);
+  await openSystem(h, q, 'page', 'harbor', failTag);
+  await openSection(q, 'brand', 'assets');
+  await h.checkSoon(() => q.guest('return !!doc.querySelector(".dc-sp-icon-error")'), `${failTag}: a failed board says the pictures didn't load`);
+  h.check((await text(q, '.dc-sp-group[aria-label="Icons"]')).includes('Search'), `${failTag}: the names still show`);
+  await q.shot(`${failTag}-1`);
+  await q.host(`${FAKE}.systems.failBoard(false)`);
+  await q.click('.dc-sp-icon-error .oc-sdk-btn', { text: 'Try again' });
+  await h.checkSoon(() => q.guest('return doc.querySelectorAll(".dc-sp-icon").length === 4'), `${failTag}: Try again draws them`);
+  await q.close();
+};
+
 export const run = async (h) => {
   const only = process.env.DC_SYSDEPTH_ONLY ? new RegExp(process.env.DC_SYSDEPTH_ONLY) : null;
   const go = (tag, fn) => (only && !only.test(tag) ? Promise.resolve() : fn());
@@ -154,4 +235,9 @@ export const run = async (h) => {
   await go('full-rail-320-dark', () => fullFlow(h, 'panel', 320, 'dark'));
   await go('older-page-1400-dark', () => olderFlow(h, 'page', 1400, 'dark'));
   await go('older-rail-320-light', () => olderFlow(h, 'panel', 320, 'light'));
+  for (const theme of ['light', 'dark']) {
+    await go(`motion-page-1400-${theme}`, () => motionIconsFlow(h, 'page', 1400, theme));
+    for (const width of [320, 480]) await go(`motion-rail-${width}-${theme}`, () => motionIconsFlow(h, 'panel', width, theme));
+    await go(`motion-empty-page-1400-${theme}`, () => motionIconsEmptyFlow(h, theme));
+  }
 };

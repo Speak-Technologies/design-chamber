@@ -358,6 +358,12 @@ export const createFakeBackend = (): FakeBackend => {
     const event: ChangeEvent = files ? { seq, slug, kind, files } : { seq, slug, kind };
     for (const listener of listeners) listener(event);
   };
+  /** A `system` event as the service's watcher sends it: the id and what changed (the system page listens for its own id). */
+  const emitSystem = (system: string, systemChange: NonNullable<ChangeEvent['systemChange']>): void => {
+    seq += 1;
+    const event: ChangeEvent = { seq, slug: null, kind: 'system', system, systemChange };
+    for (const listener of listeners) listener(event);
+  };
 
   const get = (slug: string | undefined): Rec => {
     const rec = slug === undefined ? undefined : db.get(slug);
@@ -495,7 +501,7 @@ export const createFakeBackend = (): FakeBackend => {
 
   const missingProjects = new Set<string>();
   const folderBook: FakeFolders = createFakeFolders({ emit: (slug, kind) => emit(slug, kind), exists: (slug) => db.has(slug) });
-  const systemBook: FakeSystems = createFakeSystems({ emit: (slug, kind) => emit(slug, kind), visible: rootVisible });
+  const systemBook: FakeSystems = createFakeSystems({ emit: (slug, kind) => emit(slug, kind), emitSystem, visible: rootVisible });
   const designSystem: FakeDesignSystem = createFakeDesignSystem({
     emit: (slug, kind, files) => emit(slug, kind, files),
     rows: () => systemBook.hooks.current(),

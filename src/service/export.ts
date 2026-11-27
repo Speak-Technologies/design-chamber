@@ -77,8 +77,8 @@ const uniqueTarget = (dir: string, baseName: string, reserved: ReadonlySet<strin
   return candidate;
 };
 
-/** Files of a design-system copy a page can use (Phase 2.5 §2.6): its stylesheets, fonts and logos. */
-const COPY_ASSET_PATTERN = /^system\/(?:system\.css|fonts\.css|tokens\.css|fonts\/[^/]+|logos\/[^/]+)$/;
+/** Files of a design-system copy a page can use (Phase 2.5 §2.6): its stylesheets, fonts, logos and icons. */
+const COPY_ASSET_PATTERN = /^system\/(?:system\.css|fonts\.css|tokens\.css|fonts\/[^/]+|logos\/[^/]+|icons\/[^/]+)$/;
 
 /**
  * Whether a tracked file goes into the ZIP (Phase 2.5 §2.6). Everything outside `system/` does, as

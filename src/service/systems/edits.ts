@@ -284,7 +284,7 @@ const sectionInRaw = (raw: JsonObject | null, name: string): TokenSection | null
   const entry = tokenNotes[name];
   if (typeof entry !== 'object' || entry === null || Array.isArray(entry) || !Object.hasOwn(entry, 'section')) return null;
   const section = entry.section;
-  return section === 'colours' || section === 'typography' || section === 'spacing' || section === 'radius' || section === 'shadows' || section === 'layers' || section === 'sizes' || section === 'other'
+  return section === 'colours' || section === 'typography' || section === 'spacing' || section === 'radius' || section === 'shadows' || section === 'motion' || section === 'layers' || section === 'sizes' || section === 'other'
     ? section
     : null;
 };

@@ -1,6 +1,6 @@
 # Patterns
 
-Read this before you write `patterns` in `system.json`. A pattern says how components combine to solve one recurring problem, and when to pick one solution over another. Write down the choice the product made, and why, so the next screen makes the same one.
+Read this before you write `patterns` or `screens` in `system.json`. A pattern says how components solve one recurring problem, and when to pick one solution over another. Record the choice the product made, and why.
 
 ## The pattern entry
 
@@ -14,11 +14,11 @@ Read this before you write `patterns` in `system.json`. A pattern says how compo
 
 ## Drawing a phone pattern
 
-Draw a 390px phone inside the example: a frame `width: 390px; max-width: 100%; height: 640px; position: relative; overflow: hidden; border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--bg)`. Everything inside uses `position: absolute` against the frame, never `fixed`. Show laptop and phone side by side when the pattern changes between them, a laptop frame first (about 720px wide, scaled down content is fine), then the phone, each with a plain text caption.
+In an example, draw a 390px phone: a frame `width: 390px; max-width: 100%; height: 640px; position: relative; overflow: hidden; border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--bg)`. Everything inside uses `position: absolute` against the frame, never `fixed`. Show laptop and phone side by side when the pattern changes between them, a laptop frame first (about 720px wide, scaled down content is fine), then the phone, each with a plain text caption.
 
 ## Navigation
 
-Pick by the number of top-level destinations and the depth of the app.
+Pick by the number of top destinations and the app's depth.
 
 | Pattern | Use when | Don't use when | On phone |
 |---|---|---|---|
@@ -47,18 +47,18 @@ Label the example: `data-dc-variant="top-bar"`, `"side-rail"`, `"bottom-bar"` an
 | Popover, menu | Small choices near their trigger: actions, a date, a filter | More than about 10 items without search; forms | Esc, a click outside, choosing an item |
 | Tooltip | A short label for an icon or a truncated value | Anything the user must read to proceed, or anything with a link | Pointer leaves, Esc, focus moves |
 
-Focus rules: opening a modal, sheet or full-screen overlay moves focus to its first useful control (or its title), traps Tab inside, and on close returns focus to the trigger. Menus and popovers move focus in and close on Esc. Tooltips never take focus. Every overlay has a visible close path besides Esc. Stack at most one modal; a modal never opens another modal.
+Focus rules: opening a modal, sheet or full-screen overlay moves focus to its first useful control (or its title), traps Tab inside, and on close returns focus to the trigger. Menus and popovers move focus in and close on Esc. Tooltips never take focus. Every overlay has a visible close path besides Esc. A modal never opens another modal.
 
 Sizes: modals sm 400px, md 560px, lg 800px wide, never above 90 percent of the viewport height (the body scrolls, the title and actions stay). Sheets rise to content height, at most 90 percent, with a drag handle and top corners `--radius-lg`. Slide-overs 400 to 560px.
 
-Draw each overlay over a dimmed copy of its screen, with the scrim from `--scrim`, inside the frame.
+Draw each overlay over its dimmed screen (`--scrim`), inside the frame.
 
 ## Cards and lists on phone
 
 - A list row is at least 48px tall (56 to 72px with a second line), with a full-width hit area. Trailing chevrons only when the row navigates.
 - Cards on phone run full width with 16px margins and stack; side-by-side cards start at `--bp-md`.
 - A table becomes a card list on phone: one card per row, the row's key value as the title, two to four fields as label and value, actions in a menu.
-- Swipe actions are a shortcut, never the only path: the same action is in the row's menu.
+- Swipe actions are never the only path: the row's menu has them too.
 
 ## Touch targets
 
@@ -105,14 +105,31 @@ Every screen and every component that loads or holds data designs these states:
 
 Label each in the example: `data-dc-state="empty"`, `"loading"`, `"error"`, `"partial"`.
 
-## Page types and templates
+## Page types, templates and responsive rules
 
-List the page types the product has (`kind: "page"`): for example list, detail, settings, dashboard, editor, sign-in, onboarding. For each: the regions (header, navigation, main, aside), which pattern fills each, the container width from foundations, and the primary action's place. A small example sketch of the regions in grey blocks is enough for now.
+List the page types the product has (`kind: "page"`: list, detail, settings, dashboard, editor, sign-in, onboarding). For each: its regions, which pattern fills each, the container width and the primary action's place.
 
-## Responsive rules
+One entry with `kind: "responsive"` says what changes at each breakpoint: navigation, modal to sheet or full screen, tables to cards, 12 to 8 to 4 columns, side panels stacking, hover-only controls made visible on touch. Record the platforms answer here.
 
-One entry with `kind: "responsive"`: what changes at each breakpoint. Navigation (top bar to bottom bar), overlays (modal to sheet or full screen), tables to cards, columns from 12 to 8 to 4, side panels to stacked sections, hover-only affordances get a visible control on touch. Record the platforms answer here: laptop and phone, phone first, or laptop only.
+## Screens
+
+A screen is a full HTML page in the system folder, drawn at real device widths. An example is a fragment in a card.
+
+- **Make an example** to show one pattern and its states.
+- **Make a screen** when the layout depends on window width (media queries don't answer inside an example), or for a whole page.
+
+```json
+"screens": [{ "id": "settings", "title": "Settings", "kind": "page" }],
+"viewports": [{ "id": "laptop", "label": "Laptop", "width": 1280, "height": 800 }, { "id": "phone", "label": "Phone", "width": 390, "height": 844 }]
+```
+
+- The file is always `screens/<id>.html` in the system folder. `id`: lower-case letters, digits and dashes. `title` up to 80. Up to 24 screens, each up to 60 000 characters.
+- Kinds: `page` (a page template), `pattern` (a responsive pattern), `state` (empty, loading, error as a whole page), `marketing` (landing, social, email). The first three are reviewed with Patterns, `marketing` with Brand.
+- `viewports` at the top sets the sizes for every screen; without it, Laptop 1280×800 and Phone 390×844. Follow the platforms answer. A screen's own `viewports` replaces them. Up to 8, each with an `id`, a `label` and whole numbers for width (200 to 3840) and height (200 to 4320). One id means one size across the system.
+- One file serves every viewport: use media queries at the system's breakpoints, never a file per device.
+- A whole document: doctype, `<html lang>`, charset, viewport meta, title. Link `<link rel="stylesheet" href="../tokens.css">` and use `var(--token)`; dark values come with it. Declare fonts with your own `@font-face` pointing at `../assets/fonts/`. Reach logos and pictures with `../assets/` paths. Nothing from the internet.
+- Screens aren't examples: no `data-dc-*` labels, and the component still needs its own example.
 
 ## Done for this area
 
-Core: a voice entry, plus the patterns the code already uses. Full: navigation, overlay, forms, feedback, states, data display (when the system has a chart or table component), accessibility, responsive and motion, each as its own kind. At full, every pattern of kind navigation, overlay, forms, data-display, feedback, states or page needs an example.
+Core: a voice entry, plus the patterns the code uses. Full: navigation, overlay, forms, feedback, states, data-display (when there's a chart or table component), accessibility, responsive and motion. At full, all of those but the last three, and any page pattern, need an example.

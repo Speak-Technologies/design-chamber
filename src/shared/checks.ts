@@ -54,6 +54,18 @@ const skippedSentence = (f: CheckFindingData): string => {
     if (f.params?.reason === 'failures') return `${passes} not drawn (the browser failed three times in a row).`;
     return `${passes} not drawn (the check ran out of time). Check again with --area <area> or --scheme dark.`;
   }
+  // System screens (system-builder-depth T12b): the finding names the first screen left out. A design's
+  // own note never names a file, so the two can't be confused.
+  if (f.file !== null && f.file.startsWith('screens/')) {
+    const screens = count === 1 ? '1 screen artboard was' : `${count} screen artboards were`;
+    const why =
+      f.params?.reason === 'failures'
+        ? 'the browser failed three times in a row'
+        : f.params?.reason === 'budget'
+          ? 'the check ran out of time'
+          : `the limit is ${num(f.params?.max)} per check`;
+    return `${screens} not drawn (${why}). Use --screen <id> to check the rest.`;
+  }
   const what = `${count} ${count === 1 ? 'artboard was' : 'artboards were'} not rendered`;
   if (f.params?.reason === 'budget') return `${what} (the run took longer than ${Math.round(CHECK_RUN_BUDGET_MS / 1000)} seconds).`;
   if (f.params?.reason === 'failures') return `${what} (the browser failed three times in a row).`;
@@ -415,6 +427,21 @@ const RULES: Readonly<Record<CheckCode, CodeRule>> = {
       return `${AREA_LABELS[f.params?.area ?? 'foundations']} is missing ${count === 1 ? '1 thing' : `${num(count)} things`} a ${DEPTH_LABELS[f.params?.depth ?? 'core']} system covers.`;
     },
   },
+  // ---- system-builder-depth Phase 2, Wave 0 (§13 T10a, T11): nothing raises these yet ----
+  'system-motion-no-reduced': {
+    severity: 'warning',
+    sentence: (f) => {
+      const count = Math.max(1, Math.round(f.params?.count ?? 1));
+      return count === 1
+        ? '1 example moves but has no prefers-reduced-motion rule.'
+        : `${num(count)} examples move but have no prefers-reduced-motion rule.`;
+    },
+  },
+  'system-icons-mixed': {
+    severity: 'info',
+    sentence: () => 'The icons mix viewBox sizes or stroke widths, so they may not look like one set.',
+  },
+  // ---- end system-builder-depth Phase 2 ----
   'system-board-partial': {
     severity: 'info',
     sentence: (f) => {

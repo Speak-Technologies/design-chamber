@@ -89,6 +89,7 @@ const OMITTED_REASONS: Readonly<Record<string, string>> = {
 const NOUN: Readonly<Record<string, readonly [string, string, string]>> = {
   font: ['font', 'fonts', 'embedded'],
   logo: ['logo', 'logos', 'embedded'],
+  icon: ['icon', 'icons', 'embedded'],
   example: ['example picture', 'example pictures', 'included'],
 };
 

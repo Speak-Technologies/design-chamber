@@ -7,13 +7,13 @@
 
 import path from 'node:path';
 
-import { SYSTEM_JSON_MAX_BYTES, SYSTEM_NOTE_MAX, SYSTEM_OVERVIEW_MAX, TOKENS_CSS_MAX_BYTES } from '../../shared/limits.ts';
+import { SYSTEM_JSON_MAX_BYTES, SYSTEM_NOTE_MAX, SYSTEM_OVERVIEW_MAX, SYSTEM_SCREEN_MAX, TOKENS_CSS_MAX_BYTES } from '../../shared/limits.ts';
 import { buildSystemDetail, type SystemDetailSource } from '../../shared/system-json.ts';
 import type { SystemComponent, SystemDetail, SystemEntryText, SystemState } from '../../shared/types.ts';
 import { BundleMissingEntry, BundleTooLarge, bundleDocument, createLiveFileSource, type FileSource, type SourceFile } from '../bundle.ts';
 import { checkAsset } from './assets.ts';
 import { BOARD_ENTRY_FILE, buildBoardHtml } from './board-html.ts';
-import { exampleFileOf, exampleKeyOf, type ExampleKind } from './specimen-html.ts';
+import { exampleFileOf, exampleKeyOf, ICON_DRAWN_MAX_BYTES, paintsOnlyCurrentColor, type ExampleKind } from './specimen-html.ts';
 import { listFiles, proposalDirOf, readProposalFile, readProposalsRecord, sha256Of } from './proposal-record.ts';
 import type { SystemStore } from './store.ts';
 
@@ -69,6 +69,13 @@ export const detailSourceFromTree = async (
     const body = await readText(rel, SYSTEM_NOTE_MAX * BYTES_PER_CHAR_MAX);
     if (body !== null) texts[rel] = body;
   }
+  // System screens (system-builder-depth T12a), as the store: only a file past SYSTEM_SCREEN_MAX bytes can
+  // be past the character cap, so only those are read to count.
+  for (const file of files) {
+    if (!/^screens\/[^/]+\.html$/.test(file.rel) || file.bytes <= SYSTEM_SCREEN_MAX) continue;
+    const read = await source.read(file.rel).catch(() => null);
+    if (read !== null && read.bytes.toString('utf8').length > SYSTEM_SCREEN_MAX) tooLarge.push(file.rel);
+  }
   return { id: input.id, dir: input.dir, state: input.state, systemJson, tokensCss, texts, files, build: null, tooLarge };
 };
 
@@ -109,8 +116,8 @@ export const bundleExamples = async (
 /**
  * The board document for one detail and file source: each live example bundled on its own (relative to
  * its folder, export mode, so its remote refs are reported per entry): components', and since
- * system-builder-depth D4 pattern and brand entries', exactly alike. Fonts and logos are checked with
- * `checkAsset` before the board names them, then `buildBoardHtml`. `assetKeys` are the `file:sha256`
+ * system-builder-depth D4 pattern and brand entries', exactly alike. Fonts, logos and icons are checked
+ * with `checkAsset` before the board names them, then `buildBoardHtml`. `assetKeys` are the `file:sha256`
  * parts the board cache keys on. `components`, `patterns` and `brand` carry the remote refs found.
  */
 export const assembleBoardHtml = async (
@@ -123,13 +130,23 @@ export const assembleBoardHtml = async (
   const { components, patterns, brand, examples } = await bundleExamples(detail, source);
 
   const unusable = new Set<string>();
-  for (const { file, kind } of [...detail.fonts.map((font) => ({ file: font.file, kind: 'font' as const })), ...detail.logos.map((logo) => ({ file: logo.file, kind: 'logo' as const }))]) {
+  const tinted = new Set<string>();
+  const assets = [
+    ...detail.fonts.map((font) => ({ file: font.file, kind: 'font' as const })),
+    ...detail.logos.map((logo) => ({ file: logo.file, kind: 'logo' as const })),
+    ...detail.icons.map((icon) => ({ file: icon.file, kind: 'icon' as const })),
+  ];
+  for (const { file, kind } of assets) {
     const bytes = await source.read(file).catch(() => null);
-    if (bytes === null || !checkAsset(path.posix.basename(file), kind, bytes.bytes).ok) unusable.add(file);
-    else assetKeys.push(`${file}:${sha256Of(bytes.bytes)}`);
+    const tooBigToDraw = kind === 'icon' && bytes !== null && bytes.bytes.length > ICON_DRAWN_MAX_BYTES;
+    if (bytes === null || tooBigToDraw || !checkAsset(path.posix.basename(file), kind, bytes.bytes).ok) unusable.add(file);
+    else {
+      assetKeys.push(`${file}:${sha256Of(bytes.bytes)}`);
+      if (kind === 'icon' && paintsOnlyCurrentColor(bytes.bytes.toString('utf8'))) tinted.add(file);
+    }
   }
 
-  const html = buildBoardHtml({ ...detail, components, patterns, brand }, { scheme, examples, unusable, ...(options.eager === true ? { eager: true } : {}) });
+  const html = buildBoardHtml({ ...detail, components, patterns, brand }, { scheme, examples, unusable, tinted, ...(options.eager === true ? { eager: true } : {}) });
   return { html, components, patterns, brand, assetKeys };
 };
 

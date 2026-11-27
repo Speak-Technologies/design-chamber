@@ -10,7 +10,7 @@ import { TOKEN_PREVIEW_NAME_PATTERN, TOKEN_PREVIEW_VALUE_PATTERN, TOKEN_PREVIEW_
 import { h } from '../components/dom.ts';
 import { btn, loadingRow } from '../components/kit.ts';
 import { client, host } from '../guest.ts';
-import { boardScheme, entrySelector } from '../model/system-page-model.ts';
+import { boardPointerVar, boardScheme, entrySelector } from '../model/system-page-model.ts';
 import { setSlotTokens } from '../model/slot-seed.ts';
 import { createFrameSlot, type SlotState } from '../wall/frame-slot.ts';
 
@@ -63,6 +63,9 @@ export const mountBoard = (options: BoardOptions): BoardHandle => {
   let waiting: { entry: string } | null = null;
   let scrollTo: ((entry: string) => void) | null = null;
   let hit: { x: number; y: number } | null = null;
+  /** Where the pointer is over the board (frame px), sent with the tokens so a motion demo can play under it. */
+  let pointer: TokenVar | null = null;
+  let pointerFrame = 0;
 
   const slot = createFrameSlot({
     slug: key,
@@ -82,11 +85,17 @@ export const mountBoard = (options: BoardOptions): BoardHandle => {
   const status = h('div', { class: 'dc-sys-board-state' });
   const el = h('div', { class: 'dc-sys-board', 'data-state': 'idle' }, slot.iframe, overlay, status);
 
-  const vars = (): TokenVar[] => [...themeVars(), ...preview].slice(0, TOKEN_PREVIEW_VARS_MAX);
+  const vars = (): TokenVar[] => [...themeVars(), ...preview].slice(0, TOKEN_PREVIEW_VARS_MAX - 1);
   const sendTokens = (): void => {
     const all = vars();
+    // The seed a reloaded frame starts with never carries the pointer: it is only true for this document, now.
     setSlotTokens(key, all);
-    slot.post({ type: 'set-tokens', vars: all });
+    slot.post({ type: 'set-tokens', vars: pointer === null ? all : [...all, pointer] });
+  };
+  const movePointer = (next: TokenVar | null): void => {
+    if (next?.value === pointer?.value) return;
+    pointer = next;
+    if (slot.state() === 'ready') sendTokens();
   };
 
   const load = (): void => {
@@ -128,6 +137,24 @@ export const mountBoard = (options: BoardOptions): BoardHandle => {
     slot.post({ type: 'highlight', selector });
   };
 
+  // The click layer keeps the pointer from the frame, so hover is reported instead (once a frame), and the board plays the motion
+  // demo under it. The click below still selects the entry.
+  overlay.addEventListener('pointermove', (event) => {
+    if (event.pointerType === 'touch') return;
+    const rect = slot.iframe.getBoundingClientRect();
+    const x = event.clientX - rect.left;
+    const y = event.clientY - rect.top;
+    if (pointerFrame !== 0) cancelAnimationFrame(pointerFrame);
+    pointerFrame = requestAnimationFrame(() => {
+      pointerFrame = 0;
+      movePointer(boardPointerVar(x, y));
+    });
+  });
+  overlay.addEventListener('pointerleave', () => {
+    if (pointerFrame !== 0) cancelAnimationFrame(pointerFrame);
+    pointerFrame = 0;
+    movePointer(null);
+  });
   overlay.addEventListener('click', (event) => {
     if (slot.state() !== 'ready') return;
     const rect = slot.iframe.getBoundingClientRect();
@@ -179,6 +206,7 @@ export const mountBoard = (options: BoardOptions): BoardHandle => {
       if (slot.state() === 'ready') scrollTo?.(entry);
     },
     dispose: () => {
+      if (pointerFrame !== 0) cancelAnimationFrame(pointerFrame);
       unsubscribe();
       stopReady();
       slot.dispose();

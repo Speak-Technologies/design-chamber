@@ -192,7 +192,7 @@ describe('--area', () => {
 
 describe('the flags', () => {
   test('--area and --scheme take their closed values with --system', () => {
-    assert.deepEqual(parseArgs(['check', '--system', 'acme', '--area', 'components', '--scheme=dark']), { kind: 'check-system', root: null, system: 'acme', staticOnly: false, json: false, area: 'components', scheme: 'dark' });
+    assert.deepEqual(parseArgs(['check', '--system', 'acme', '--area', 'components', '--scheme=dark']), { kind: 'check-system', root: null, system: 'acme', staticOnly: false, json: false, area: 'components', scheme: 'dark', screens: [] });
     for (const area of ['foundations', 'components', 'patterns', 'brand']) assert.equal((parseArgs(['check', '--system', 'acme', `--area=${area}`]) as { area?: string }).area, area);
     for (const scheme of ['light', 'dark', 'both']) assert.equal((parseArgs(['check', '--system', 'acme', '--scheme', scheme]) as { scheme?: string }).scheme, scheme);
   });

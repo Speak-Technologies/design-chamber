@@ -4,8 +4,8 @@
 
 import { codeSpan } from '../../shared/agent/context.ts';
 import { AREA_LABELS, cleanDetail, countFindings, sortFindings, withMessage } from '../../shared/checks.ts';
-import { CHECK_TEXT_SHOWN, SCREEN_ID_PATTERN, SYSTEM_ID_PATTERN } from '../../shared/limits.ts';
-import type { CheckFinding, CheckReport, DesignJson, SystemArea } from '../../shared/types.ts';
+import { CHECK_TEXT_SHOWN, SCREEN_ID_PATTERN, SYSTEM_ENTRY_ID_PATTERN, SYSTEM_ID_PATTERN } from '../../shared/limits.ts';
+import type { CheckFinding, CheckFindingData, CheckReport, DesignJson, SystemArea } from '../../shared/types.ts';
 import { BOARD_PASSES } from './board-analyze.ts';
 import type { SystemBoardShot, SystemCheckReport } from './system-static.ts';
 
@@ -17,9 +17,10 @@ export type CliCommand =
   | { kind: 'check'; root: string | null; target: string; screens: string[]; staticOnly: boolean; json: boolean }
   /**
    * `dc check --system <id>`: a design system, drawn at two widths (and the dark pass) unless `--static`.
-   * `area` and `scheme` are null when not given (system-builder-depth D8).
+   * `area` and `scheme` are null when not given (system-builder-depth D8). `screens` (T12b) names system
+   * screens to check alone, skipping the board; empty means the board and every screen.
    */
-  | { kind: 'check-system'; root: string | null; system: string; staticOnly: boolean; json: boolean; area: SystemArea | null; scheme: CheckScheme | null }
+  | { kind: 'check-system'; root: string | null; system: string; staticOnly: boolean; json: boolean; area: SystemArea | null; scheme: CheckScheme | null; screens: string[] }
   | { kind: 'error'; message: string };
 
 /** `--scheme`'s values. */
@@ -30,7 +31,7 @@ const SCHEME_VALUES: readonly CheckScheme[] = ['light', 'dark', 'both'];
 
 export const USAGE = [
   'Usage: dc [--root <designs folder>] check <design folder name | path> [--screen <id>]... [--static] [--json]',
-  '       dc [--root <designs folder>] check --system <design system id> [--area <area>] [--scheme <scheme>] [--static] [--json]',
+  '       dc [--root <designs folder>] check --system <design system id> [--area <area> | --screen <id>...] [--scheme <scheme>] [--static] [--json]',
   '       dc [--root <designs folder>] list [--project <full path>] [--kind page|canvas] [--text <words>] [--json]',
   '       dc [--root <designs folder>] read <design folder name> [--json]',
   '       dc --help | --version',
@@ -41,11 +42,12 @@ export const USAGE = [
   '         its design system and the last check. Reads only. Exit 0: answered. Exit 2: it could not run.',
   'check    Render the design at its viewports, save PNGs under <design>/.chamber/check/ and list what to fix.',
   '         Exit 0: no errors. Exit 1: errors found. Exit 2: the check could not run.',
-  '--screen   Check only this screen (canvas designs). Repeat for several.',
+  '--screen   Check only this screen (canvas designs, or a design system\'s screens: then the board is skipped). Repeat for several.',
   '--static   Check the files only: no browser, nothing written. Applies to designs and systems.',
   '--system   Check a design system in <designs folder>/_systems/ instead of a design: draw its board at two widths,',
   '         save PNGs under <system>/.chamber/check/ and list what to fix. The report goes to its .chamber/check.json.',
   '         With dark values it also draws the board dark at the wide width (foundations, components, patterns).',
+  '         Then it renders every screen in system.json at each of its viewports, with the design checks (dark too with dark values).',
   '--area     With --system: picture and measure one area: foundations, components, patterns or brand. The file checks still cover all of it.',
   '--scheme   With --system: light, dark or both (the default when the system has dark values).',
   '--json     Print the findings and image paths as JSON.',
@@ -105,8 +107,13 @@ export const parseArgs = (argv: readonly string[]): CliCommand => {
   if (verb !== 'check') return { kind: 'error', message: `Unknown command ${cleanDetail(verb, 40)}. Run dc --help.` };
   if (system !== null) {
     if (target !== null) return { kind: 'error', message: 'Check a design or a design system, not both.' };
-    if (screens.length > 0) return { kind: 'error', message: 'A design system has no screens; leave out --screen.' };
-    return { kind: 'check-system', root, system, staticOnly, json, area, scheme };
+    // System screens (system-builder-depth T12b): ids as system.json writes them; not with --area or --static.
+    if (screens.length > 0) {
+      if (!screens.every((screen) => SYSTEM_ENTRY_ID_PATTERN.test(screen))) return { kind: 'error', message: '--screen needs a screen id from system.json screens, such as home.' };
+      if (area !== null) return { kind: 'error', message: "--screen can't be combined with --area: --screen checks only those screens and skips the board." };
+      if (staticOnly) return { kind: 'error', message: '--screen draws screens; leave out --static, or leave out --screen to check the files only.' };
+    }
+    return { kind: 'check-system', root, system, staticOnly, json, area, scheme, screens };
   }
   if (area !== null || scheme !== null) return { kind: 'error', message: '--area and --scheme are for a design system: use them with --system.' };
   if (target === null) return { kind: 'error', message: 'Say which design to check: dc check <design folder name>.' };
@@ -229,9 +236,17 @@ export type SystemTextInput = {
 /** The board passes as viewports, so a board finding's sentence names "Wide board 1526×900" or "Wide board, dark 1526×900". */
 const BOARD_WIDTH_VIEWPORTS = BOARD_PASSES.map((width) => ({ id: width.id, label: width.label, width: width.width, height: width.height }));
 
-/** The system's findings (static and measured) with severity and sentence, errors first. */
-export const systemFindingsOf = (report: SystemCheckReport): CheckFinding[] =>
-  sortFindings([...report.static.findings, ...(report.render?.findings ?? [])].map((finding) => withMessage(finding, BOARD_WIDTH_VIEWPORTS)));
+/**
+ * The system's findings (static and measured) with severity and sentence, errors first. A screen finding
+ * is named by its own screen's size only, so a viewport id two screens use at different sizes, or one
+ * called like a board pass (`wide`), is never named by another artboard's size.
+ */
+export const systemFindingsOf = (report: SystemCheckReport): CheckFinding[] => {
+  const screenViewports = report.render?.screens?.viewports ?? [];
+  const viewportsOf = (finding: CheckFindingData): readonly { id: string; label: string; width: number; height: number }[] =>
+    finding.file !== null && finding.file.startsWith('screens/') && finding.screen !== null ? screenViewports.filter((viewport) => viewport.screen === finding.screen) : BOARD_WIDTH_VIEWPORTS;
+  return sortFindings([...report.static.findings, ...(report.render?.findings ?? [])].map((finding) => withMessage(finding, viewportsOf(finding))));
+};
 
 /** A picture's file name (the run folder is printed once). */
 const fileName = (rel: string): string => rel.slice(rel.lastIndexOf('/') + 1);
@@ -288,6 +303,24 @@ const boardPictureLines = (render: NonNullable<SystemCheckReport['render']>, run
   return lines;
 };
 
+/**
+ * The screen pictures block (system-builder-depth T12b): one line per artboard drawn, by file name,
+ * with its size and page height. The run folder is named once (here, or by the board block above).
+ */
+const screenPictureLines = (render: NonNullable<SystemCheckReport['render']>, runDir: string | null, boardNamedRunDir: boolean): string[] => {
+  const screens = render.screens;
+  if (screens === undefined) return [];
+  const drawn = screens.artboards.filter((artboard) => artboard.pngs.length > 0);
+  if (drawn.length === 0) return ['', 'No screen pictures were saved.'];
+  const lines = ['', `Screen pictures${runDir === null || boardNamedRunDir ? '' : ` in ${runDir}`}, one per screen and viewport. Open each one and look before you say you are done.`];
+  for (const artboard of drawn) {
+    const label = screens.viewports.find((viewport) => viewport.screen === artboard.screen && viewport.id === artboard.viewport)?.label ?? artboard.viewport;
+    const more = artboard.pngs.length > 1 ? ` (${artboard.pngs.length} images, top to bottom)` : '';
+    lines.push(`  ${fileName(artboard.pngs[0] ?? '')}  ${artboard.screen ?? ''} at ${label} ${artboard.width}x${artboard.height}, page ${artboard.docHeight}px tall${more}`);
+  }
+  return lines;
+};
+
 /** The text `dc check --system` prints: the findings, then the board pictures to look at. */
 export const formatSystemCheckText = (input: SystemTextInput): string => {
   const findings = systemFindingsOf(input.report);
@@ -320,7 +353,10 @@ export const formatSystemCheckText = (input: SystemTextInput): string => {
     lines.push('', "No Chrome, Edge or Chromium was found, so the board wasn't drawn. Only the files were checked.");
   } else {
     if (render.drawn.from === 'proposal') lines.push('', `Drew the proposed board (proposal ${render.drawn.proposal ?? 'unknown'}).`);
-    lines.push(...boardPictureLines(render, input.runDir ?? null));
+    // --screen draws no board: only the screens block, which then names the run folder.
+    const boardDrawn = render.widths.length > 0 || render.screens === undefined;
+    if (boardDrawn) lines.push(...boardPictureLines(render, input.runDir ?? null));
+    lines.push(...screenPictureLines(render, input.runDir ?? null, boardDrawn && render.shots.length > 0));
   }
 
   if (input.reportPath !== null) lines.push('', `Full report: ${input.reportPath}`);

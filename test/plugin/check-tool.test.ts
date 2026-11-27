@@ -258,7 +258,7 @@ describe('buildChildArgs', () => {
   });
 
   test('the tool input names the board draw and the files-only escape', () => {
-    assert.match(TOOL_INPUT.properties.system.description, /Draws its board at two widths and saves PNGs to look at/);
+    assert.match(TOOL_INPUT.properties.system.description, /Draws its board at two widths, then its screens at their viewports, and saves PNGs to look at/);
     assert.ok(!TOOL_INPUT.properties.system.description.includes('files only'));
     assert.match(TOOL_INPUT.properties.static.description, /designs and systems/);
   });
@@ -293,7 +293,7 @@ describe('toolResult', () => {
     assert.equal(toolResult({ kind: 'exit', code: 134, stdout: '', stderr: '', stdoutCut: false }).metadata.designChamber.exit, 2);
     assert.match(toolResult({ kind: 'exit', code: null, stdout: '', stderr: '', stdoutCut: false }).content, /stopped before it finished/);
     assert.equal(toolResult({ kind: 'timeout' }).content, 'The check took longer than 3 minutes and was stopped. Try one screen with screens: ["<id>"].');
-    assert.equal(toolResult({ kind: 'timeout' }, true).content, 'The check took longer than 3 minutes and was stopped. Run it again with static: true to check the files only.');
+    assert.equal(toolResult({ kind: 'timeout' }, true).content, 'The check took longer than 3 minutes and was stopped. Check one area with area, or some screens with screens: ["<id>"], or the files only with static: true.');
     assert.equal(toolResult({ kind: 'spawn-error', code: 'EACCES' }).content, 'Design Chamber could not start its check (EACCES).');
     assert.equal(toolResult({ kind: 'spawn-error', code: 'EACCES' }).metadata.designChamber.exit, 2);
   });

@@ -107,12 +107,20 @@ export type ServiceTransport = { serviceRequest(request: GuestRequest): Promise<
 
 export type RenderDoc = { meta: RenderMeta; html: string };
 
+/** Which state of a system screen to load: a version or the waiting proposal (not both), and the scheme (default light). */
+export type SystemScreenOptions = { version?: string | null; proposal?: string | null; scheme?: 'light' | 'dark' };
+
 export type ServiceClient = {
   call<K extends RouteKey>(key: K, ...args: CallArgs<K>): Promise<RouteResponse<K>>;
   /** Full bundled document for a page (`screen` null) or a canvas screen, optionally at a version. */
   loadRender(slug: string, screen?: string | null, version?: string | null): Promise<RenderDoc>;
   /** The specimen board of a design system (Phase 2.5): live or at a version, in a colour scheme. */
   loadBoard(id: string, version?: string | null, scheme?: 'light' | 'dark'): Promise<RenderDoc>;
+  /**
+   * One system screen (system-builder-depth T12a): live, at a version or in the proposal waiting now, keyed by
+   * colour scheme like the board. Per screen, not per viewport: the frame sets the width.
+   */
+  systemScreen(id: string, screen: string, options?: SystemScreenOptions): Promise<RenderDoc>;
   /** Uploads `text` in F7-safe chunks; resolves to the completed upload id. */
   upload(text: string): Promise<string>;
   /**
@@ -377,6 +385,43 @@ export const createServiceClient = (transport: ServiceTransport, options: Servic
     return task;
   };
 
+  const fetchSystemScreen = async (id: string, screen: string, options: SystemScreenOptions): Promise<RenderDoc> => {
+    const query: RouteQuery<'GET /systems/:id/screens/render'> = { screen, scheme: options.scheme ?? 'light' };
+    if (options.version) query.version = options.version;
+    if (options.proposal) query.proposal = options.proposal;
+    const meta = await call('GET /systems/:id/screens/render', { params: { id }, query });
+    const cached = renders.get(meta.key);
+    if (cached) {
+      renders.delete(meta.key);
+      renders.set(meta.key, cached);
+      return cached;
+    }
+    const indexes = Array.from({ length: meta.chunks }, (_, n) => n);
+    const parts = await mapLimit(indexes, RENDER_CHUNK_CONCURRENCY, (n) =>
+      call('GET /systems/:id/screens/render/chunk', { params: { id }, query: { key: meta.key, n: String(n) } }),
+    );
+    const doc = { meta, html: parts.join('') };
+    remember(doc);
+    return doc;
+  };
+
+  const systemScreen = (id: string, screen: string, options: SystemScreenOptions = {}): Promise<RenderDoc> => {
+    const key = `screen\u0000${id}\u0000${screen}\u0000${options.version ?? ''}\u0000${options.proposal ?? ''}\u0000${options.scheme ?? 'light'}`;
+    const running = inflight.get(key);
+    if (running) return running;
+    const task = (async () => {
+      try {
+        return await fetchSystemScreen(id, screen, options);
+      } catch (error) {
+        // The service dropped the key between meta and chunks (a system event): build again, once.
+        if (isServiceError(error, 'stale')) return fetchSystemScreen(id, screen, options);
+        throw error;
+      }
+    })().finally(() => inflight.delete(key));
+    inflight.set(key, task);
+    return task;
+  };
+
   const upload = async (text: string): Promise<string> => {
     if (text.length > UPLOAD_TOTAL_MAX) {
       throw new ServiceError('too-large', `This text is too long to send to Design Chamber (over ${UPLOAD_TOTAL_MAX.toLocaleString('en-US')} characters).`);
@@ -431,5 +476,5 @@ export const createServiceClient = (transport: ServiceTransport, options: Servic
   const undoStop = (undoId: string): Promise<UndoStopResponse> => call('POST /system-stops/:undoId/undo', { params: { undoId }, body: {} });
   const loadLivingPage = (systemId: string): Promise<LivingPageResponse> => call('GET /systems/:id/living-page', { params: { id: systemId } });
 
-  return { call, loadRender, loadBoard, upload, uploadBinary, thumbnail, getProposal, stopBuild, undoStop, loadLivingPage };
+  return { call, loadRender, loadBoard, systemScreen, upload, uploadBinary, thumbnail, getProposal, stopBuild, undoStop, loadLivingPage };
 };

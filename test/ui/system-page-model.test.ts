@@ -69,7 +69,7 @@ test('the four areas are spelled out and uncovered ones say so', () => {
   assert.equal(groups[0]?.covered, true);
   assert.equal(groups[2]?.covered, false);
   assert.equal(groups[2]?.meta, 'Not covered');
-  assert.equal(groups[0]?.rows.length, 8);
+  assert.equal(groups[0]?.rows.length, 9);
 });
 
 test('counts read as plain nouns and an empty section says "Nothing yet"', () => {
@@ -91,8 +91,8 @@ test('review progress counts only covered sections', () => {
   const d = detail({ review: { colours: { state: 'looks-good', note: null }, patterns: { state: 'looks-good', note: null } } as SystemDetail['review'] });
   const progress = reviewProgress(d);
   assert.equal(progress.done, 1);
-  assert.equal(progress.total, 9);
-  assert.equal(progress.text, '1 of 9 reviewed');
+  assert.equal(progress.total, 10);
+  assert.equal(progress.text, '1 of 10 reviewed');
   assert.ok(!unreviewedSections(d).includes('patterns'));
   assert.ok(unreviewedSections(d).includes('typography'));
 });

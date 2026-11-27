@@ -233,7 +233,7 @@ test('example pictures plan for pattern and brand keys; the cache key is content
   // The same content gives the same picture whoever it belongs to.
   assert.equal(shots[0]?.key, shots[1]?.key);
   assert.equal(LIVING_EXAMPLE_GENERATOR_VERSION, 2);
-  assert.equal(LIVING_PAGE_GENERATOR_VERSION, 5);
+  assert.equal(LIVING_PAGE_GENERATOR_VERSION, 6);
 });
 
 test('copy-on-link carries pattern and brand examples as agent reference', () => {

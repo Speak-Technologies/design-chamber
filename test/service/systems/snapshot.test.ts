@@ -8,6 +8,7 @@ import { lstat, mkdir, readdir, readFile, rm, symlink, utimes, writeFile } from 
 import path from 'node:path';
 import { test } from 'node:test';
 
+import { SYSTEM_FILES_MAX } from '../../../src/shared/limits.ts';
 import { ApiError } from '../../../src/service/http.ts';
 import { renameWithRetry } from '../../../src/service/paths.ts';
 import { readRepoSystem } from '../../../src/service/systems/repo-read.ts';
@@ -63,7 +64,7 @@ test('a folder over the file cap is refused whole, and the last snapshot stands'
   const id = await rig.repoSystem();
   assert.equal((await refreshSnapshot(rig.ctx, id, { by: 'agent' })).kind, 'refreshed');
   const kept = (await rig.systems.readState(id)).snapshot?.treeHash;
-  for (let n = 0; n < 201; n += 1) await writeFile(rig.repo(`design-system/notes/n${String(n).padStart(3, '0')}.md`), `note ${n}\n`);
+  for (let n = 0; n <= SYSTEM_FILES_MAX; n += 1) await writeFile(rig.repo(`design-system/notes/n${String(n).padStart(3, '0')}.md`), `note ${n}\n`);
 
   const outcome = await refreshSnapshot(rig.ctx, id, { by: 'agent' });
   assert.deepEqual(outcome, { kind: 'problem', reason: 'too-large' });

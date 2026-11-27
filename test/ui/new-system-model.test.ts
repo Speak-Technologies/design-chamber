@@ -114,7 +114,7 @@ test('a folder path must be a full path: a drive, a share or a root', () => {
 
 const scan = (over: Partial<ScanSummary> = {}): ScanSummary => ({
   directory: 'C:\\work\\shop',
-  counts: { colours: 48, typography: 9, spacing: 12, radius: 0, shadows: 0, layers: 0, sizes: 0, other: 0, fonts: 3, logos: 2 },
+  counts: { colours: 48, typography: 9, spacing: 12, radius: 0, shadows: 0, motion: 0, layers: 0, sizes: 0, other: 0, fonts: 3, logos: 2 },
   files: Array.from({ length: 14 }, (_, n) => ({ path: `f${n}.css`, found: 1 })),
   skipped: [],
   assets: [],
@@ -129,13 +129,13 @@ const scan = (over: Partial<ScanSummary> = {}): ScanSummary => ({
 test('the scan sentence counts what it found, leaving out what it did not', () => {
   assert.equal(scanSummarySentence(scan()), 'Found 48 colours, 9 type styles, 12 spacing values, 3 font files, 2 logo files in 14 files.');
   assert.equal(
-    scanSummarySentence(scan({ counts: { colours: 1, typography: 0, spacing: 0, radius: 2, shadows: 1, layers: 0, sizes: 1, other: 1, fonts: 1, logos: 1 }, files: [{ path: 'a.css', found: 5 }] })),
+    scanSummarySentence(scan({ counts: { colours: 1, typography: 0, spacing: 0, radius: 2, shadows: 1, motion: 0, layers: 0, sizes: 1, other: 1, fonts: 1, logos: 1 }, files: [{ path: 'a.css', found: 5 }] })),
     'Found 1 colour, 2 corner radii, 1 shadow, 2 sizes, 1 font file, 1 logo file in 1 file.',
   );
 });
 
 test('a scan that found nothing says so instead of a sentence of zeros', () => {
-  const empty = scan({ counts: { colours: 0, typography: 0, spacing: 0, radius: 0, shadows: 0, layers: 0, sizes: 0, other: 0, fonts: 0, logos: 0 }, files: [] });
+  const empty = scan({ counts: { colours: 0, typography: 0, spacing: 0, radius: 0, shadows: 0, motion: 0, layers: 0, sizes: 0, other: 0, fonts: 0, logos: 0 }, files: [] });
   assert.equal(scanSummarySentence(empty), null);
   assert.equal(scanFoundNothing(empty), true);
   assert.equal(scanFoundNothing(scan()), false);

@@ -56,7 +56,10 @@ const isRealDirectory = async (dir: string): Promise<boolean> => {
   return info !== null && info.isDirectory() && !info.isSymbolicLink();
 };
 
-/** `dc check --system <id>`: draw the board at two widths (and dark) and save its pictures, or `--static` for the files only. */
+/**
+ * `dc check --system <id>`: draw the board at two widths (and dark), then every screen at its viewports, and
+ * save the pictures; `--screen` draws only those screens; `--static` checks the files only.
+ */
 const checkSystem = async (input: {
   root: string;
   settings: SettingsFile;
@@ -66,6 +69,8 @@ const checkSystem = async (input: {
   chromePath: string | undefined;
   area: SystemArea | null;
   scheme: CheckScheme | null;
+  /** `--screen` (T12b): only these system screens, no board. */
+  screens: string[];
 }): Promise<number> => {
   const target = await resolveSystemTarget({ id: input.id, root: input.root }, { path, realpath, isRealDirectory, platform: process.platform });
   if (!target.ok) return fail(target.message);
@@ -90,6 +95,7 @@ const checkSystem = async (input: {
               signal: controller.signal,
               area: input.area,
               scheme: input.scheme,
+              screens: input.screens,
             },
           }),
     });
@@ -100,7 +106,8 @@ const checkSystem = async (input: {
     out(input.json ? systemJsonOutput(text) : formatSystemCheckText(text));
     return exitCodeOf(systemFindingsOf(result.report));
   } catch (error) {
-    if (error instanceof CheckInterrupted || error instanceof CheckOutputError) return fail(error.message);
+    // An unknown --screen id is refused before anything is drawn (CheckUsageError): exit 2 with its sentence.
+    if (error instanceof CheckInterrupted || error instanceof CheckOutputError || error instanceof CheckUsageError) return fail(error.message);
     return fail(`The check could not run: ${error instanceof Error ? error.message : String(error)}`);
   } finally {
     await store.dispose();
@@ -157,7 +164,7 @@ const main = async (): Promise<number> => {
   if (!path.isAbsolute(root)) return fail(`The designs folder must be a full path, not ${root}.`);
   if (!(await isDirectory(root))) return fail(`The designs folder ${root} does not exist.`);
   if (command.kind === 'check-system') {
-    return checkSystem({ root, settings, id: command.system, json: command.json, staticOnly: command.staticOnly, chromePath, area: command.area, scheme: command.scheme });
+    return checkSystem({ root, settings, id: command.system, json: command.json, staticOnly: command.staticOnly, chromePath, area: command.area, scheme: command.scheme, screens: command.screens });
   }
   const target = await resolveTarget({ arg: command.target, root, cwd: process.cwd() }, { path, realpath, isDesignFolder, platform: process.platform });
   if (!target.ok) return fail(target.message);

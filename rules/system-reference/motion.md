@@ -16,13 +16,15 @@ Read this before you write duration or easing tokens, the motion pattern, or any
 | `--duration-fast` | 120ms | Hover, press, toggles, checkboxes, small fades, tooltips |
 | `--duration-base` | 200ms | Menus, popovers, toasts, accordions, tabs |
 | `--duration-slow` | 320ms | Modals, bottom sheets, slide-overs, full-screen panels |
-| `--ease-out` | `ease-out` | Things entering or appearing |
-| `--ease-in` | `ease-in` | Things leaving |
-| `--ease-in-out` | `ease-in-out` | Things moving or resizing while on screen |
+| `--ease-out` | `cubic-bezier(0.2, 0, 0, 1)` | Things entering or appearing |
+| `--ease-in` | `cubic-bezier(0.4, 0, 1, 1)` | Things leaving |
+| `--ease-in-out` | `cubic-bezier(0.4, 0, 0.2, 1)` | Things moving or resizing while on screen |
 
-- Keep the names exactly `--duration-*` and `--ease-*`. The checklist counts them, and a later motion section will pick them up by name.
-- They land in section `other`. That is expected; leave `section` unset or set it to `other`.
-- tokens.css does not accept `cubic-bezier()` yet, so the easing tokens hold the keywords. Put the exact curves in each token's note and in the motion pattern, so code can use them: enter `cubic-bezier(0.2, 0, 0, 1)`, exit `cubic-bezier(0.4, 0, 1, 1)`, move `cubic-bezier(0.4, 0, 0.2, 1)`.
+- Motion is its own section in Foundations. Names starting `--duration-`, `--ease-` or `--motion-` go there when the value fits; set `section: "motion"` in `system.json` for any other name.
+- A value is one time or one easing. A time is `ms` or `s`, from 0 to 10 s. An easing is `linear`, `ease`, `ease-in`, `ease-out`, `ease-in-out`, `cubic-bezier(x1, y1, x2, y2)` with both x from 0 to 1, or `steps(n)` with n from 1 to 100 and an optional `, start` or `, end`.
+- `cubic-bezier()` and `steps()` are valid only in the motion section. No shorthands such as `200ms ease-out` in one token.
+- The section takes the layouts `card`, `compact` and `table`.
+- The board draws a duration as a bar against the longest, and an easing as its curve, each with a chip that plays it on hover. A plain alias, `var(--x)`, previews what it leads to; other formulas get no preview.
 - Exits are faster than entries, about two thirds of the time. A modal enters in `--duration-slow` and leaves in `--duration-base`.
 - Nothing in product UI runs longer than 400ms. Larger distance earns a little more time; small parts never get the slow token.
 - Durations never change in dark mode. Don't give these tokens dark values.
@@ -70,15 +72,15 @@ tokens.css can't hold a `prefers-reduced-motion` block, so the rule lives in the
 
 ## Writing the motion pattern
 
-- An entry in `patterns` with `id: "motion"`, `kind: "motion"`, a title, a note of one or two sentences, and the body in `patterns/motion.md`: the three durations and what uses each, the curves, the enter and exit table cut to the elements this product has, the never list, and the reduced motion rule.
+- An entry in `patterns` with `id: "motion"`, `kind: "motion"`, a title, a note of one or two sentences, and the body in `patterns/motion.md`: the three durations and what uses each, the three curves, the enter and exit table cut to the elements this product has, the never list, and the reduced motion rule.
 - Give it an example, `patterns/motion.html`, with `layout: "full"`. The check takes still pictures, so an animation that loops shows only one random frame. Draw each overlay's start and end side by side instead: a menu at 96 percent and faded, then at rest; a sheet below the frame edge, then up. Label each pair with its token names in plain text.
 - If the example includes a live hover demo, keep its resting state readable, since that is what the picture shows.
 
 ## How the check sees motion
 
-- The `motion` topic of a full system counts at least one `--duration-*` token and one `--ease-*` token. The `motion` pattern topic counts a pattern of kind `motion`.
-- The board shows motion tokens as text rows under Other. That is correct for now.
+- The `motion` topic of a full system wants a time and an easing in the motion section (a `--duration-*` and an `--ease-*` name also count). The `motion` pattern topic counts a pattern of kind `motion`.
+- `system-motion-no-reduced` is a warning when a component, pattern or brand example declares `transition` or `animation` (in `<style>` or `style`, other than `none`) and holds no `prefers-reduced-motion` media query. A comment mentioning it doesn't count.
 
 ## Done for this area
 
-Three durations, three easings with their curves in the notes, a `motion` pattern with an example, and a reduced motion rule in every example that moves.
+Three durations, three easings, a `motion` pattern with an example, and a reduced motion rule in every example that moves.

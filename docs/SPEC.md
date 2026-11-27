@@ -757,7 +757,7 @@ parsers in `src/shared/system-json.ts`):
   system written before it reads the same detail plus empty fields, pinned by `test/shared/fixtures/old-system*`):
   - `depth`: `tokens` | `core` | `full`, what the completeness check expects; anything else is one problem on
     `depth` and the check is off. In no fingerprint.
-  - `outOfScope`: checklist topic ids the user agreed to leave out (closed list of 33, `SYSTEM_TOPIC_IDS` in
+  - `outOfScope`: checklist topic ids the user agreed to leave out (closed list of 33 in Phase 1, 34 with `icons` in Phase 2, `SYSTEM_TOPIC_IDS` in
     `src/shared/system-checklist.ts`: `surface text border brand status type-styles spacing radius pairs
     dark-values state-colours data-colours control-sizes breakpoints elevation layers motion components examples
     focus-disabled voice navigation overlays forms feedback states data-display accessibility responsive logo
@@ -778,9 +778,38 @@ parsers in `src/shared/system-json.ts`):
     missing file is a problem on that entry. A changed example changes that section's fingerprint. Copy-on-link
     copies them as agent reference (`link.ts` `REFERENCE_PATTERN`); the repo snapshot reads them with the example
     cap. The board draws a **Pairs** block at the end of Colours (entry keys `pair:<n>`, `data-dc-pair`, stripped
-    from the living page). `BOARD_GENERATOR_VERSION` 7, `LIVING_PAGE_GENERATOR_VERSION` 5;
+    from the living page). Phase 1 set `BOARD_GENERATOR_VERSION` 7 and `LIVING_PAGE_GENERATOR_VERSION` 5 (Phase 2: 9 and 6);
     `LIVING_EXAMPLE_GENERATOR_VERSION` stays 2 (the picture cache key is the content, never an entry id).
   - `SystemSummary.depth` carries `depth` to the list (null when absent, invalid or unreadable).
+  **Builder depth, Phase 2** (`documentation/specs/system-builder-depth.md` §13, §17):
+  - **Motion section.** `SystemSection` and `TokenSection` gain `motion` (foundations, after `shadows`; layouts
+    card, compact, table). `classifyToken` puts `--duration-*`, `--ease-*` and `--motion-*` with a motion value, a
+    formula or no value into it, and `resolveTokenSection` reads a recorded `"section": "other"` on such a token as
+    motion. Values (`validateTokenValue`): a time in `ms`/`s`, 0 to `SYSTEM_MOTION_DURATION_MAX_MS` (10 000), or an
+    easing (`linear`, `ease`, `ease-in`, `ease-out`, `ease-in-out`, `cubic-bezier()` with x in 0..1,
+    `steps(1..SYSTEM_MOTION_STEPS_MAX[, start|end])`); `cubic-bezier()` and `steps()` pass only in this section. A
+    plain alias (`var(--x)`, no fallback) is previewed through at most four hops. The Sizes fingerprint of a system
+    whose motion tokens sat in `other` changes once (accepted). `deriveReview` no longer judges a section missing
+    from `readyFingerprints`, so a system Ready before Motion shows no change from it.
+  - **Icons.** `icons: [{ file, name, note }]`, SVG files under `assets/icons/`, ≤ `SYSTEM_ICONS_MAX` (150);
+    `SYSTEM_FILES_MAX` 200 → 400. `checkAsset` checks only that the file is an SVG, so an icon is only ever drawn as
+    `<img>` (an Icons grid at the top of Assets, at the first four `--icon-*` size tokens, else 24 px, light and dark;
+    files over 32 KB are not drawn; a `currentColor`-only icon gets a filter to the ground's text colour). Icons join
+    the brand fingerprint with the logos; copy-on-link copies listed icons to `system/icons/`; the snapshot reads
+    them. No route serves one icon file: the panel takes pictures from the board's data URLs.
+  - **Screens.** `screens: [{ id, title, kind: page | pattern | state | marketing, viewports? }]`, files
+    `screens/<id>.html` (full documents linking `../tokens.css`, fonts by their own `@font-face`), ≤
+    `SYSTEM_SCREENS_MAX` (24), each ≤ `SYSTEM_SCREEN_MAX` (60 000 characters; longer stays listed with a problem
+    and is not shown). Top-level `viewports` (the design.json shape; default Laptop 1280×800, Phone 390×844); a
+    screen's own `viewports` replace them (fixed-size social and email). Screens have no review section: page,
+    pattern and state fold into the patterns fingerprint, marketing into brand, only when present. Copy-on-link
+    carries them as agent reference; the snapshot reads them with the screen cap. Served by
+    `GET /systems/:id/screens/render` (§7); drawn on the living page as one light picture per viewport at the
+    viewport's size and scale 1 (`LIVING_PAGE_GENERATOR_VERSION` stays 6, example cache 2).
+  - Checklist: `icons` is a 34th topic (full, foundations); `responsive` is also met by a `page` screen with a
+    viewport ≤ `PHONE_VIEWPORT_MAX_WIDTH` (480 px), `marketing` by any marketing screen.
+  - Generator versions after Phase 2: `BOARD_GENERATOR_VERSION` 9 (8 for motion and icons, 9 for hover demos from the page pointer), `LIVING_PAGE_GENERATOR_VERSION` 6,
+    `LIVING_EXAMPLE_GENERATOR_VERSION` 2.
 - `tokens.css`: light values = the last declaration in a top-level `:root`; dark values = a `:root` directly
   inside `@media (prefers-color-scheme: dark)`; other contexts are listed, not used. Every value Design Chamber
   writes or shows passes `validateTokenValue` (no `url(`, no `; { } < > \`, a function allowlist, a per-section
@@ -999,6 +1028,7 @@ shapes: P25 §3.1 to §3.5.
 | Hand edits | `POST /systems/:id/edits` · `POST /systems/:id/edits/:eid/undo` · `POST /systems/:id/hand-edits/clear` | `routes/system-edits.ts`, `systems/edits.ts` |
 | Brand files | `POST /systems/:id/assets` (an upload taken once, type checked by extension and content) · `POST /systems/:id/assets/from-folder` | `routes/system-assets.ts`, `systems/assets.ts` |
 | Board | `GET /systems/:id/board` (`?version=&scheme=`, `RenderMeta`) · `GET /systems/:id/board/chunk` (raw text) | `routes/system-board.ts`, `systems/board.ts` |
+| Screens | `GET /systems/:id/screens/render` (`?screen=&version=|proposal=&scheme=`, `RenderMeta`; a listed `SYSTEM_ENTRY_ID_PATTERN` screen only, checked before any read, bundled in render mode from the board's contained source) · `GET /systems/:id/screens/render/chunk` (raw text; board-cache entries are kind-tagged, so neither chunk route serves the other's) | `routes/system-screens.ts`, `systems/board.ts` `renderScreen` |
 | History | `GET /systems/:id/versions` · `GET /systems/:id/versions/:vid/diff` · `POST /systems/:id/versions/:vid/restore` | `routes/system-versions.ts`, `systems/versions.ts` |
 | Chat and checks | `POST /systems/:id/prompt` (`make`, `ask`, `review`, `resync-notes`, `checks`, `continue`, `living-page`, `reconcile`, `build-continue`) · `GET /systems/:id/checks` | `routes/system-chat.ts`, `routes/system-checks.ts` |
 | Scans and re-sync | `POST /system-scans` · `GET` / `DELETE /system-scans/:scanId` · `POST /systems/:id/resync` | `routes/system-scans.ts` (`systems/extract.ts` jobs), resync in `routes/system-edits.ts` |
@@ -1560,8 +1590,8 @@ One engine, two callers: the agent's CLI and the service's on-demand run.
   cap of 5 applies; invalid knob definitions surface as `design-json-field` findings. CLI, `design_check`
   and the badge share it.
 - **Design system checks** use the same engine and output rules; they are specified with the systems in §9.19
-  ("Checks"): `dc check --system <id> [--area <area>] [--scheme light|dark|both] [--static] [--json]`, the
-  visual board check, the dark pass, measured colour pairs and the builder-depth codes.
+  ("Checks"): `dc check --system <id> [--area <area> | --screen <id>…] [--scheme light|dark|both] [--static] [--json]`,
+  the visual board check, the dark pass, measured colour pairs, system screens and the builder-depth codes.
 
 ### 9.10 Design index and host calls, Phase 1.5 (P15 §3.1, §3.3)
 - **`design-index.ts`** `createDesignIndex({ store, hub, log })`: `all()` (last good `DesignSummary[]`,
@@ -1916,6 +1946,23 @@ Every write goes through `systems.dir(id)` + `resolvePlainTarget` or the root's 
     value, or either flag without `--system`, exits 2 with one sentence before anything is read. `design_check`
     takes `area` and `scheme` (closed enums; refused with a design). The report gains `render.areas` and
     `render.schemes`.
+  **Builder depth, Phase 2:**
+  - Static `system-motion-no-reduced` (warning, any depth): a component, pattern or brand example of a covered
+    area declares `transition` or `animation` in a `<style>` or `style=""` (longhands and vendor forms count,
+    `none` doesn't) and has no `@media` naming `prefers-reduced-motion`; comments, scripts and text don't count;
+    examples are read bundled, so a linked stylesheet counts. Static `system-icons-mixed` (info): more than one
+    root `viewBox` size or `stroke-width` across the listed icons (files ≤ 32 KB scanned, comments skipped).
+  - **Screens in the check** (`system-run.ts`): after the board passes, every listed screen at each of its
+    viewports through `renderArtboards` **without** `inspect`, so the design probe and `analyze.ts` run as for a
+    design (kind page, the design CSP, offline); bundled in export mode from the contained source. Findings name
+    `screens/<id>.html` and that screen's own viewport sizes. With dark values (or `--scheme dark`) each screen
+    is drawn again with `prefers-color-scheme: dark` as `<viewport>-dark`, after every light artboard; repeats
+    of the light twin are dropped. PNGs `screen-<id>@<viewport>[-dark][-n].png`. ≤ 24 screen artboards, light
+    first; the rest and anything the time cuts are `render-skipped` notes ("Use --screen <id> to check the rest.").
+    Budget: with screens the board passes keep 70 s of the 110 s and screens get `SYSTEM_CHECK_SCREENS_BUDGET_MS`
+    (40 s), one run deadline under the tool's 180 s. `--screen <id>` (repeatable; the tool's `screens` for a
+    system) draws only those, skips the board and gets the whole 110 s; an unknown id, or `--screen` with `--area`
+    or `--static`, exits 2 before anything is drawn. `--area` draws no screens.
 - **Export** (`export.ts` `exportIncludes`): §6.8.
 
 **Building systems with the agent (S8; P25 §5.9 to §5.14).** The service's part is to issue tickets, adopt,
@@ -3636,6 +3683,18 @@ Where the build differs from the design:
 5. Pair contrast and colour maths live in `src/shared/` (`pair-contrast.ts`, `color.ts`) so the panel shows the
    same ratios.
 6. `LIVING_EXAMPLE_GENERATOR_VERSION` stayed 2: the picture cache key is content, not an entry id.
+
+### System builder depth, Phase 2 (2026-11-27), as built
+Branch `feat/system-phase-2` (`4451ad8` to `27ff325`); the spec's §17 has the full list. Contract in §6.7, route
+in §7, checks in §9.19. Where the build differs from the design:
+1. The rail can't open the full-screen page (the SDK has no `openSurface` for it), so the rail lists the screens and
+   shows one at a time; the page shows them all on a wall built from `createFrameSlot` and the camera maths.
+2. Screens don't preview pending value edits (the board does).
+3. The living page draws screens at viewport size, scale 1, light only, and stays at generator version 6.
+4. A phone viewport for the `responsive` topic is at most 480 px wide (`PHONE_VIEWPORT_MAX_WIDTH`).
+5. Check budget: 70 s board, 40 s screens; `--screen` alone gets the whole 110 s.
+6. No icon file route; the panel reads icon pictures from the board's data URLs.
+7. The board does not list screens as a link to the Screens view (design §4.6): KI-42.
 
 ---
 

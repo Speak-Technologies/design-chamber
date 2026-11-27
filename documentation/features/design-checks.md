@@ -16,7 +16,9 @@ session). The chat shows each call as a card titled "Design check · <design>".
   canvas screen ids to check (a list, or text like `"home,faq"`), at most 16. `static`: files only,
   no browser. For a design system (`system` instead of `design`): `area` (`foundations`,
   `components`, `patterns` or `brand`) and `scheme` (`light`, `dark` or `both`), as the command's
-  `--area` and `--scheme` below; any other value, or either one with a design, is refused.
+  `--area` and `--scheme` below; any other value, or either one with a design, is refused. A
+  system also takes `screens`: its own screen ids (as `system.json` writes them), to check only those
+  screens and skip the board; not with `area` or `static`.
 - **Answer.** Exactly what `dc check` prints: the result line, the PNG paths to look at, the
   findings. Exit 0 or 1 answer that text; when the check cannot run the answer is "The check could
   not run: " and the CLI's own sentence. After 3 minutes the check is stopped and the answer
@@ -190,12 +192,14 @@ them with no change (only warnings and errors are sent to the agent):
 | `system-states-missing` | the system sets `depth` to `core` or `full`, covers components, and a component lists a variant, size or state with no instance labelled `data-dc-variant`, `data-dc-size` or `data-dc-state` in its example (matched ignoring case). One finding per list; the detail names each component and the missing names | warning |
 | `system-contrast-low` | a colour pair (declared, or found from `--x-fg` / `--on-x` names) is under its level (body text 4.5:1, large text and UI parts 3:1), worked out from hex and rgb values. One finding per scheme; the detail reads `--fg on --bg 4.49:1 (light)`. Other colour formats are measured by the visual check, which folds them into the same finding for that scheme | warning, or a note on a system with no `depth` when every low pair in it was found from token names (so a system made before these checks gets no new warning) |
 | `system-coverage-gap` | the system sets `depth` and a covered area misses topics of the completeness checklist. One finding per area; the detail lists up to 8 topic ids from the closed list, never agent text. Topics listed in `system.json` `outOfScope` stop counting. A `tokens` system is asked the foundations core topics only | a note at `core` and `tokens`, a warning at `full` |
+| `system-motion-no-reduced` | a component, pattern or brand example of a covered area declares `transition` or `animation` (a longhand or a vendor form counts, `none` doesn't) in a `<style>` element or a `style` attribute, and has no `@media` rule naming `prefers-reduced-motion` (either `reduce` or `no-preference`). Comments, scripts and page text don't count either way, so a comment holding the words doesn't clear it. The run reads each example bundled, so a rule in a linked stylesheet counts. One finding at any depth: the count, the first file, and up to three files in the detail | warning |
+| `system-icons-mixed` | the listed icons use more than one `viewBox` size (the root element's width and height) or more than one `stroke-width` value, across a system that covers foundations or brand. Read by a plain scan of each file up to 32 KB, comments skipped; icons with no `viewBox` or stroke don't count. The detail lists up to four values of each | a note |
 
 The checklist (the same table is in the agent's reference doc `board-and-check.md`):
 
 | Area | Core | Full adds |
 |---|---|---|
-| Foundations | `surface`, `text`, `border`, `brand` (a colour each), `status` (3), `type-styles` (4), `spacing` (4), `radius` (1), `pairs` (1, found pairs count), `dark-values` (every colour, only when any dark value exists) | `state-colours` (a colour ending `-hover`, `-active`, `-selected` or `-disabled`), `data-colours` (when a chart or table component or a data-display pattern exists), `type-styles` (6), `control-sizes` (a `--control-*` or `--touch-*` size), `breakpoints`, `elevation` (a shadow), `layers`, `motion` (a `--duration-*` and an `--ease-*` token) |
+| Foundations | `surface`, `text`, `border`, `brand` (a colour each), `status` (3), `type-styles` (4), `spacing` (4), `radius` (1), `pairs` (1, found pairs count), `dark-values` (every colour, only when any dark value exists) | `state-colours` (a colour ending `-hover`, `-active`, `-selected` or `-disabled`), `data-colours` (when a chart or table component or a data-display pattern exists), `type-styles` (6), `control-sizes` (a `--control-*` or `--touch-*` size), `breakpoints`, `elevation` (a shadow), `layers`, `motion` (a time and an easing in the Motion section, or a `--duration-*` and an `--ease-*` token), `icons` (1 listed icon) |
 | Components | `components` (1), `examples` (every component) | `focus-disabled` (a component listing hover also lists focus and disabled) |
 | Patterns & voice | `voice` | `navigation`, `overlays`, `forms`, `feedback`, `states`, `data-display` (same condition), `accessibility`, `responsive`, `motion`; each counted by a pattern of that kind |
 | Brand & marketing | `logo` (a logo file or a logo-use entry) | `brand-colour`, `imagery`, `marketing` (a marketing, social or email entry) |
@@ -257,6 +261,33 @@ Two flags make the fix loop quick (the tool takes the same as `area` and `scheme
 A value off these lists, a missing value, or either flag with a design instead of `--system` stops
 the command with exit 2 and one sentence, before anything is read. `--area brand --scheme dark`
 draws nothing to picture (the dark pass leaves Brand out), and the output says so.
+
+**Screens** (spec: `documentation/specs/system-builder-depth.md` §4.6, T12b). After the board, a
+full check renders every screen in `system.json` `screens` at each of its viewports (its own, else the
+system's), with the same checks as a design screen: contrast, sideways overflow, clipped or
+overlapping text, alt text, labels and names, script errors and blocked requests. Each screen is
+bundled from the system's own files, offline, in its own browser page, with the design check's CSP.
+Findings name `screens/<id>.html` and the viewport ("screens/home.html @ Phone 390×844").
+
+- **Dark too.** When the system has dark values (or `--scheme dark`), each screen is drawn again at
+  each viewport with `prefers-color-scheme: dark`, so the tokens' dark values apply (checked in a real
+  browser by a test). The dark artboards come after every light one and are named `<viewport>-dark`;
+  a finding the light artboard already has is not repeated. `--scheme light` leaves them out.
+- **Pictures.** `screen-<id>@<viewport>.png` (`-dark` for the dark ones, `-2` and on for a page taller
+  than its viewport), in the same run folder as the board's; the text lists each with its size.
+- **Limits and time.** Up to 24 screen artboards per check, light first; the rest are one note,
+  "N screen artboards were not drawn (the limit is 24 per check). Use --screen <id> to check the
+  rest." With screens to draw, the board passes keep 70 s of the 110 s render budget and the screens
+  get 40 s; screens the time cuts get the same kind of note. The whole run still ends inside the
+  tool's 3 minutes. A screen with a problem (its file missing or over 60 000 characters) is not drawn;
+  the file checks name it.
+- **`--screen <id>`** (repeatable; the tool's `screens`) checks only those screens, skips the board and
+  gets the whole 110 s. An id the system doesn't list stops the command with exit 2 before anything
+  is drawn or written. It can't be combined with `--area` or `--static`.
+- **`--area`** pictures one board area and draws no screens: the quick loop. A full check, without
+  `--area`, draws them.
+- **Checklist.** A `page` screen with a viewport at most 480 px wide also counts for `responsive`, and
+  any `marketing` screen counts for `marketing`.
 
 **Measured colour pairs.** The board's Pairs block shows each pair as "Aa Text" on the light and
 dark grounds. While measuring, the check reads each sample's text and background colour as the page
@@ -347,6 +378,9 @@ uses the same flags. The browser is driven over
 a pipe (no debugging port is opened), killed when the run ends, and limited to 12 seconds per
 screen and 90 seconds per run. A screen that hangs, crashes or reloads forever is a finding;
 the next screen still renders. Renders use the light scheme, as the wall does.
+A check also sets the other display preferences itself (motion allowed, normal contrast, no forced
+colours, transparency allowed), so its findings and pictures are the same on a machine with
+animations off or high contrast on.
 
 **Empty, unsaved storage.** Checks run with empty page storage. Every artboard gets a fresh
 stand-in for `localStorage` and `sessionStorage`, installed before the design's own scripts, so a

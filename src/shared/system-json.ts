@@ -17,6 +17,7 @@
 // on the order the two tasks land in.
 
 import { sha256Hex } from './agent/ownership.ts';
+import { defaultViewports } from './design-json.ts';
 import {
   BOARD_LAYOUT_TEXT_MAX,
   BUILD_PROBLEM_VALUE_MAX,
@@ -30,6 +31,7 @@ import {
   SYSTEM_COMPONENT_SIZES_MAX,
   SYSTEM_COMPONENTS_MAX,
   SYSTEM_ENTRY_ID_PATTERN,
+  SYSTEM_ICONS_MAX,
   SYSTEM_OUT_OF_SCOPE_MAX,
   SYSTEM_PAIRS_MAX,
   SYSTEM_EXAMPLE_MAX,
@@ -40,6 +42,15 @@ import {
   SYSTEM_NOTES_MAX,
   SYSTEM_OVERVIEW_MAX,
   SYSTEM_PATTERNS_MAX,
+  SYSTEM_SCREEN_MAX,
+  SYSTEM_SCREENS_MAX,
+  VIEWPORT_HEIGHT_MAX,
+  VIEWPORT_HEIGHT_MIN,
+  VIEWPORT_ID_PATTERN,
+  VIEWPORT_LABEL_MAX,
+  VIEWPORT_WIDTH_MAX,
+  VIEWPORT_WIDTH_MIN,
+  VIEWPORTS_MAX,
   REPO_PATH_PATTERN,
   SYSTEM_PROPOSAL_FILES_MAX,
   SYSTEM_PROPOSAL_ID_PATTERN,
@@ -52,7 +63,7 @@ import {
   SYSTEM_USAGE_NOTE_MAX,
 } from './limits.ts';
 import { isSystemTopicId } from './system-checklist.ts';
-import { classifyToken, isDarkContext, isLightContext, validateTokenValue, type TypeField, type ValueCheck } from './token-edit.ts';
+import { classifyToken, isDarkContext, isLightContext, resolveTokenSection, validateTokenValue, type TypeField, type ValueCheck } from './token-edit.ts';
 import { ALSO_SET_MAX, scanTokens, type Declaration, type TokenContext } from './tokens-css.ts';
 import type {
   BoardLayout,
@@ -81,6 +92,9 @@ import type {
   SystemDetail,
   SystemEntryText,
   SystemHomeView,
+  SystemIcon,
+  SystemScreen,
+  SystemScreenKind,
   SystemSection,
   SystemState,
   SystemToken,
@@ -88,6 +102,7 @@ import type {
   TokenSection,
   TokenValue,
   TypeStyle,
+  Viewport,
 } from './types.ts';
 
 /** One entry that could not be read; the page lists them ("3 entries couldn't be read."). */
@@ -101,6 +116,8 @@ export const AREA_OF_SECTION: Readonly<Record<SystemSection, SystemArea>> = Obje
   spacing: 'foundations',
   radius: 'foundations',
   shadows: 'foundations',
+  // system-builder-depth Phase 2 (§13 T10a): after shadows, in board order.
+  motion: 'foundations',
   layers: 'foundations',
   sizes: 'foundations',
   components: 'components',
@@ -167,7 +184,7 @@ const NOT_JSON = `${SYSTEM_UNREADABLE_PREFIX} system.json isn't valid JSON.`;
 const TOO_LARGE_JSON = `${SYSTEM_UNREADABLE_PREFIX} system.json is larger than 1 MB.`;
 
 /** The list keys of system.json; each must be a list when present. */
-const LIST_KEYS = ['type', 'fonts', 'logos', 'components', 'notes', 'sources', 'patterns', 'brand', 'pairs', 'outOfScope'] as const;
+const LIST_KEYS = ['type', 'fonts', 'logos', 'icons', 'components', 'notes', 'sources', 'patterns', 'brand', 'pairs', 'outOfScope'] as const;
 
 export const parseSystemJson = (text: string): ParsedSystemJson => {
   // A cheap bound first: every UTF-16 unit is at most 3 UTF-8 bytes.
@@ -518,6 +535,8 @@ export const LAYOUTS_OF_SECTION: Readonly<Partial<Record<SystemSection, readonly
   spacing: Object.freeze(['card', 'compact', 'table'] as const),
   radius: Object.freeze(['card', 'compact', 'table'] as const),
   shadows: Object.freeze(['card', 'compact', 'table'] as const),
+  // system-builder-depth Phase 2 (§13 T10a).
+  motion: Object.freeze(['card', 'compact', 'table'] as const),
   sizes: Object.freeze(['card', 'compact', 'table'] as const),
 });
 
@@ -660,7 +679,7 @@ export const SYSTEM_TOKEN_RULES: SystemTokenRules = Object.freeze({
   validate: validateTokenValue,
 });
 
-const TOKEN_SECTIONS: readonly TokenSection[] = ['colours', 'typography', 'spacing', 'radius', 'shadows', 'layers', 'sizes', 'other'];
+const TOKEN_SECTIONS: readonly TokenSection[] = ['colours', 'typography', 'spacing', 'radius', 'shadows', 'motion', 'layers', 'sizes', 'other'];
 const isTokenSection = (value: unknown): value is TokenSection => typeof value === 'string' && (TOKEN_SECTIONS as readonly string[]).includes(value);
 const COLOUR_GROUPS: readonly ColourGroup[] = ['brand', 'surface', 'text', 'border', 'status', 'data', 'other'];
 const isColourGroup = (value: unknown): value is ColourGroup => typeof value === 'string' && (COLOUR_GROUPS as readonly string[]).includes(value);
@@ -750,7 +769,8 @@ const readTokens = (
     const first = light ?? dark;
     // `css` is non-null here: declarations only come from a scanned file.
     const firstText = first === null || css === null ? '' : css.slice(first.from, first.to);
-    const section = entry?.section ?? (first === null ? 'other' : rules.classify(name, firstText));
+    // A recorded `other` on a motion token reads as motion (system-builder-depth T10a, `resolveTokenSection`).
+    const section = first === null ? entry?.section ?? 'other' : resolveTokenSection(entry?.section, rules.classify(name, firstText));
     const lightValue = light === null || css === null ? null : tokenValueOf(css, light, section, rules);
     const darkValue = dark === null || css === null ? null : tokenValueOf(css, dark, section, rules);
     tokens.push({
@@ -878,6 +898,36 @@ const readLogos = (raw: JsonObject | null, files: ReadonlySet<string>, problems:
     if (note === null) return void problems.push({ entry, message: 'Its note is longer than 500 characters.' });
     out.push({ file, variant, note });
   });
+  return out;
+};
+
+/**
+ * `icons` (system-builder-depth §4.6): SVG files in `assets/icons/`, each once, ≤ `SYSTEM_ICONS_MAX`
+ * entries read (the rest are one problem with the true count). A missing `name` reads as the file's
+ * name without `.svg`. The file's content is not looked at here: icons are only ever drawn as `<img>`.
+ */
+const readIcons = (raw: JsonObject | null, files: ReadonlySet<string>, problems: SystemProblem[]): SystemIcon[] => {
+  const out: SystemIcon[] = [];
+  const seen = new Set<string>();
+  const list = listOf(raw, 'icons');
+  list.slice(0, SYSTEM_ICONS_MAX).forEach((value, index) => {
+    const entry = `icons[${index}]`;
+    if (!isObject(value)) return void problems.push({ entry, message: 'This icon is not an object.' });
+    const file = assetFile(own(value, 'file'), 'assets/icons');
+    if (file === null || !/\.svg$/i.test(file)) return void problems.push({ entry, message: 'An icon file must be an SVG in assets/icons/.' });
+    if (!files.has(file)) return void problems.push({ entry, message: `${file} is missing.` });
+    if (seen.has(file)) return void problems.push({ entry, message: 'This icon is listed twice.' });
+    const rawName = own(value, 'name') ?? file.slice('assets/icons/'.length, -'.svg'.length);
+    const name = lineText(rawName, 60);
+    if (name === null) return void problems.push({ entry, message: 'This icon needs a name of 1 to 60 characters.' });
+    const note = noteText(own(value, 'note'), SYSTEM_USAGE_NOTE_MAX);
+    if (note === null) return void problems.push({ entry, message: 'Its note is longer than 500 characters.' });
+    seen.add(file);
+    out.push({ file, name, note });
+  });
+  if (list.length > SYSTEM_ICONS_MAX) {
+    problems.push({ entry: 'icons', message: `Design systems hold up to ${SYSTEM_ICONS_MAX} icons. ${groupDigits(list.length - SYSTEM_ICONS_MAX)} more weren't read.` });
+  }
   return out;
 };
 
@@ -1136,6 +1186,120 @@ const readOutOfScope = (raw: JsonObject | null, problems: SystemProblem[]): Syst
   return out;
 };
 
+// ---- screens and their viewports (system-builder-depth §4.6, §13 T12a) ----
+
+/** A screen's file, relative to the system folder: the reader, the screens route and the check use this one path. */
+export const systemScreenFileOf = (id: string): string => `screens/${id}.html`;
+
+/** The sentence for a listed screen whose file is not there. */
+export const screenMissingSentence = (id: string): string => `${systemScreenFileOf(id)} is missing.`;
+
+/** The sentence for a screen over `SYSTEM_SCREEN_MAX` characters (UTF-16 units, as every text cap here counts). */
+export const screenTooLongSentence = (id: string): string => `${systemScreenFileOf(id)} is longer than ${groupDigits(SYSTEM_SCREEN_MAX)} characters.`;
+
+const SCREEN_KINDS: readonly SystemScreenKind[] = ['page', 'pattern', 'state', 'marketing'];
+
+/** The review area a screen folds into (§16): page, pattern and state → patterns; marketing → brand. */
+export const screenAreaOf = (kind: SystemScreenKind): 'patterns' | 'brand' => (kind === 'marketing' ? 'brand' : 'patterns');
+
+const VIEWPORT_SENTENCE = `Each viewport needs an id (letters, digits, - or _), and a whole-number width from ${VIEWPORT_WIDTH_MIN} to ${VIEWPORT_WIDTH_MAX} and height from ${VIEWPORT_HEIGHT_MIN} to ${VIEWPORT_HEIGHT_MAX}.`;
+
+const isWholeIn = (value: unknown, min: number, max: number): value is number => typeof value === 'number' && Number.isInteger(value) && value >= min && value <= max;
+
+/**
+ * A viewport list in the design.json shape: usable entries in order, each id once, at most
+ * `VIEWPORTS_MAX`; a missing or unusable label reads as the id. One problem on `entry` names what was
+ * skipped. Null when nothing in it is usable.
+ */
+const readViewportList = (value: JsonValue[], entry: string, problems: SystemProblem[]): Viewport[] | null => {
+  const out: Viewport[] = [];
+  let skipped = false;
+  for (const item of value) {
+    if (!isObject(item)) {
+      skipped = true;
+      continue;
+    }
+    const id = own(item, 'id');
+    const width = own(item, 'width');
+    const height = own(item, 'height');
+    if (typeof id !== 'string' || !VIEWPORT_ID_PATTERN.test(id) || !isWholeIn(width, VIEWPORT_WIDTH_MIN, VIEWPORT_WIDTH_MAX) || !isWholeIn(height, VIEWPORT_HEIGHT_MIN, VIEWPORT_HEIGHT_MAX)) {
+      skipped = true;
+      continue;
+    }
+    if (out.some((viewport) => viewport.id === id)) {
+      skipped = true;
+      continue;
+    }
+    const label = lineText(own(item, 'label'), VIEWPORT_LABEL_MAX) ?? id;
+    out.push({ id, label, width, height });
+  }
+  if (out.length > VIEWPORTS_MAX) {
+    problems.push({ entry, message: `Only the first ${VIEWPORTS_MAX} viewports are used.` });
+    out.length = VIEWPORTS_MAX;
+  }
+  if (out.length === 0) {
+    problems.push({ entry, message: `No viewport here can be used. ${VIEWPORT_SENTENCE}` });
+    return null;
+  }
+  if (skipped) problems.push({ entry, message: `Some viewports were skipped. ${VIEWPORT_SENTENCE} Each id once.` });
+  return out;
+};
+
+/**
+ * `system.json` `viewports`: the sizes every screen shows at unless it lists its own. Absent or null →
+ * the default pair (Laptop 1280×800, Phone 390×844); unusable → the default pair and a problem.
+ */
+const readSystemViewports = (raw: JsonObject | null, problems: SystemProblem[]): Viewport[] => {
+  const value = raw === null ? undefined : own(raw, 'viewports');
+  if (value === undefined || value === null) return defaultViewports('canvas');
+  if (!Array.isArray(value)) {
+    problems.push({ entry: 'viewports', message: 'viewports in system.json is not a list, so the default sizes are used.' });
+    return defaultViewports('canvas');
+  }
+  return readViewportList(value, 'viewports', problems) ?? defaultViewports('canvas');
+};
+
+/**
+ * `system.json` `screens` (§4.6): `{ id, title, kind, viewports? }`, the file always
+ * `screens/<id>.html`. A bad entry is dropped with a problem; past `SYSTEM_SCREENS_MAX` each further
+ * entry is one. A listed screen whose file is missing or over `SYSTEM_SCREEN_MAX` characters (the
+ * store names it in `tooLarge`) stays, with its sentence as `problem` and in the problems list. A
+ * screen's own `viewports` replace the system's (fixed sizes for social and email, owner decision 5).
+ */
+const readScreens = (raw: JsonObject | null, sizes: ReadonlyMap<string, number>, tooLarge: ReadonlySet<string>, problems: SystemProblem[]): SystemScreen[] => {
+  const value = raw === null ? undefined : own(raw, 'screens');
+  if (value === undefined || value === null) return [];
+  if (!Array.isArray(value)) {
+    problems.push({ entry: 'screens', message: 'screens in system.json is not a list, so it was skipped.' });
+    return [];
+  }
+  const out: SystemScreen[] = [];
+  value.forEach((item, index) => {
+    if (!isObject(item)) return void problems.push({ entry: `screens[${index}]`, message: 'This screen is not an object.' });
+    const id = own(item, 'id');
+    const entry = entryLabel('screens', index, id);
+    if (out.length >= SYSTEM_SCREENS_MAX) return void problems.push({ entry, message: `Design systems hold up to ${SYSTEM_SCREENS_MAX} screens.` });
+    if (typeof id !== 'string' || !SYSTEM_ENTRY_ID_PATTERN.test(id) || out.some((screen) => screen.id === id)) {
+      return void problems.push({ entry, message: 'This screen needs its own id: lower-case letters, digits and dashes.' });
+    }
+    const file = own(item, 'file');
+    if (file !== undefined && file !== null && file !== systemScreenFileOf(id)) return void problems.push({ entry, message: `Its file must be ${systemScreenFileOf(id)}.` });
+    const title = lineText(own(item, 'title'), 80);
+    if (title === null) return void problems.push({ entry, message: 'This screen needs a title of 1 to 80 characters.' });
+    const kind = own(item, 'kind');
+    if (typeof kind !== 'string' || !(SCREEN_KINDS as readonly string[]).includes(kind)) return void problems.push({ entry, message: `Its kind must be ${orList(SCREEN_KINDS)}.` });
+    const ownViewports = own(item, 'viewports');
+    let viewports: Viewport[] | null = null;
+    if (Array.isArray(ownViewports)) viewports = readViewportList(ownViewports, entry, problems);
+    else if (ownViewports !== undefined && ownViewports !== null) problems.push({ entry, message: "Its viewports aren't a list, so the system's sizes are used." });
+    const rel = systemScreenFileOf(id);
+    const problem = !sizes.has(rel) ? screenMissingSentence(id) : tooLarge.has(rel) ? screenTooLongSentence(id) : null;
+    if (problem !== null) problems.push({ entry, message: problem });
+    out.push({ id, title, kind: kind as SystemScreenKind, viewports, problem });
+  });
+  return out;
+};
+
 const baseName = (directory: string): string => {
   const parts = directory.split(/[\\/]+/).filter((part) => part !== '');
   return parts.at(-1) ?? directory;
@@ -1261,6 +1425,7 @@ export const buildSystemDetail = (source: SystemDetailSource, rules: SystemToken
   const type = readTypeStyles(raw, rules, problems);
   const fonts = readFonts(raw, files, problems);
   const logos = readLogos(raw, files, problems);
+  const icons = readIcons(raw, files, problems);
   const sourceFiles = readSourceFiles(raw, sizes, problems);
   const layoutSink: LayoutIgnoredSink = { ignored: [], ignoredCount: 0 };
   const sectionLayouts = readSectionLayouts(raw, layoutSink);
@@ -1291,6 +1456,7 @@ export const buildSystemDetail = (source: SystemDetailSource, rules: SystemToken
     type.length === 0 &&
     fonts.length === 0 &&
     logos.length === 0 &&
+    icons.length === 0 &&
     sourceFiles.length === 0 &&
     components.length === 0 &&
     notes.length === 0 &&
@@ -1348,6 +1514,10 @@ export const buildSystemDetail = (source: SystemDetailSource, rules: SystemToken
     depth,
     pairs,
     outOfScope,
+    // system-builder-depth Phase 2: icons (T11), screens and the sizes they show at (T12a).
+    icons,
+    screens: readScreens(raw, sizes, tooLarge, problems),
+    viewports: readSystemViewports(raw, problems),
   };
   const derived = deriveReview(state, sectionFingerprints(detail, source.hashes ?? {}));
   detail.review = derived.review;
@@ -1394,6 +1564,8 @@ export const sectionFingerprints = (detail: SystemDetail, hashes: Readonly<Recor
       .map(tokenFacts);
   const textHash = (text: string | null): string | null => (text === null ? null : sha256Hex(text));
   const logos = detail.logos.map((logo) => ({ ...logo, hash: fileHash(logo.file) }));
+  // Icons are reviewed with the logos, under Brand & marketing; they join only when there are some.
+  const icons = detail.icons.map((icon) => ({ ...icon, hash: fileHash(icon.file) }));
   // system-builder-depth §4.3: the new facts join only when present, so a system written before them
   // keeps every fingerprint (and its reviews). Automatic pairs come from tokens already counted, and
   // `depth` and `outOfScope` are about the checklist, not content: none of them joins.
@@ -1413,6 +1585,7 @@ export const sectionFingerprints = (detail: SystemDetail, hashes: Readonly<Recor
     spacing: tokensOf(['spacing']),
     radius: tokensOf(['radius']),
     shadows: tokensOf(['shadows']),
+    motion: tokensOf(['motion']),
     layers: tokensOf(['layers']),
     sizes: tokensOf(['sizes', 'other']),
     components: detail.components.map((component) => ({
@@ -1428,13 +1601,24 @@ export const sectionFingerprints = (detail: SystemDetail, hashes: Readonly<Recor
       ...(component.sizes.length === 0 ? {} : { sizes: component.sizes }),
     })),
     patterns: detail.patterns.map((entry) => entryFacts('patterns', entry)),
-    brand: { entries: detail.brand.map((entry) => entryFacts('brand', entry)), logos },
+    brand: { entries: detail.brand.map((entry) => entryFacts('brand', entry)), logos, ...(icons.length === 0 ? {} : { icons }) },
     assets: {
       fonts: detail.fonts.map((font) => ({ ...font, hash: fileHash(font.file) })),
       sources: detail.sourceFiles.map((file) => ({ file: file.file, hash: fileHash(file.file) })),
     },
   };
-  return Object.fromEntries(SYSTEM_SECTIONS.map((section) => [section, sha256Hex(canonical(facts[section]))])) as Record<SystemSection, string>;
+  // system-builder-depth T12a: screens fold into the area of their kind (§16), with the sizes they show at
+  // and their file's hash. They join only when the area has some, so every other fingerprint is unchanged.
+  const screensOf = (area: 'patterns' | 'brand'): unknown[] =>
+    detail.screens
+      .filter((screen) => screenAreaOf(screen.kind) === area)
+      .map((screen) => ({ id: screen.id, title: screen.title, kind: screen.kind, viewports: screen.viewports ?? detail.viewports, file: fileHash(systemScreenFileOf(screen.id)) }));
+  const withScreens = (section: SystemSection): unknown => {
+    if (section !== 'patterns' && section !== 'brand') return facts[section];
+    const screens = screensOf(section);
+    return screens.length === 0 ? facts[section] : { facts: facts[section], screens };
+  };
+  return Object.fromEntries(SYSTEM_SECTIONS.map((section) => [section, sha256Hex(canonical(withScreens(section)))])) as Record<SystemSection, string>;
 };
 
 /** A section shows its recorded review only while its fingerprint still matches (§2.5). */
@@ -1449,7 +1633,10 @@ export const deriveReview = (
       recorded !== undefined && recorded.fingerprint === fingerprints[section] ? { state: recorded.state, note: recorded.note ?? null } : { state: 'not-reviewed', note: null };
   }
   const ready = state.readyFingerprints;
-  const changesToReview = state.status === 'ready' && ready !== null && SYSTEM_SECTIONS.some((section) => ready[section] !== fingerprints[section]);
+  // A section missing from the Ready record (one added after the system was marked Ready, such as
+  // `motion`) is not judged: it would otherwise show "changes to review" on every older Ready system.
+  const changesToReview =
+    state.status === 'ready' && ready !== null && SYSTEM_SECTIONS.some((section) => ready[section] !== undefined && ready[section] !== fingerprints[section]);
   return { review, changesToReview };
 };
 
@@ -1539,10 +1726,14 @@ export const isSystemContractRel = (rel: string): boolean => {
   if (rel === 'system.json' || rel === 'tokens.css' || rel === 'OVERVIEW.md') return true;
   const entry = /^(notes|patterns|brand)\/([^/]+)\.md$/.exec(rel);
   if (entry !== null) return SYSTEM_ENTRY_ID_PATTERN.test(entry[2] ?? '');
+  // System screens (system-builder-depth T12a): full documents, one per listed id.
+  const screen = /^screens\/([^/]+)\.html$/.exec(rel);
+  if (screen !== null) return SYSTEM_ENTRY_ID_PATTERN.test(screen[1] ?? '');
   // Live examples: components, and pattern and brand entries (system-builder-depth D4).
   const example = /^(components|patterns|brand)\/([^/]+)\.html$/.exec(rel);
   if (example !== null) return SYSTEM_ENTRY_ID_PATTERN.test(example[2] ?? '');
-  const asset = /^(assets\/fonts|assets\/logos|sources)\/([^/]+)$/.exec(rel);
+  if (/^assets\/icons\//.test(rel) && !/\.svg$/i.test(rel)) return false;
+  const asset = /^(assets\/fonts|assets\/logos|assets\/icons|sources)\/([^/]+)$/.exec(rel);
   return asset !== null && SAFE_FILE_PATTERN.test(asset[2] ?? '') && !(asset[2] ?? '').includes('..');
 };
 

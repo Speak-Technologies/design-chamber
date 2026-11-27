@@ -4098,6 +4098,255 @@ button.dc-syspg-title:focus-visible {
   overflow-wrap: anywhere;
 }
 
+/* The Screens view (system-builder-depth T13): a switch over the stage, then a small wall of the system's screens. */
+.dc-syspg-views {
+  display: flex;
+  flex: none;
+  align-self: flex-start;
+  gap: 2px;
+  margin: var(--dc-s3) var(--dc-s4) 0;
+  padding: 2px;
+  border-radius: calc(var(--dc-r) + 2px);
+  background: color-mix(in srgb, var(--oc-fg) 8%, transparent);
+}
+.dc-syspg-views[hidden] {
+  display: none;
+}
+/* With the switch on show, the switch and the build strip share one row, the strip wrapping under the switch when the row is
+   too narrow for both. Without it the head has no box of its own and the strip floats over the board as before. */
+.dc-syspg[data-views='true'] .dc-syspg-stagehead {
+  display: flex;
+  flex: none;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--dc-s2);
+  margin: var(--dc-s3) var(--dc-s4) 0;
+}
+.dc-syspg[data-views='true'] .dc-syspg-stagehead > .dc-syspg-views {
+  margin: 0;
+}
+/* Only a strip on show joins the row; a hidden one stays the out-of-flow live region it always is, so nothing is announced late. */
+.dc-syspg[data-views='true'] .dc-syspg-build:has(> .dc-build:not([data-phase='hidden'])) {
+  position: static;
+  display: flex;
+  flex: 1 1 12rem;
+  min-width: 0;
+  height: auto;
+}
+.dc-syspg[data-views='true'] .dc-syspg-build > .dc-build:not([data-phase='hidden']) {
+  position: static;
+  max-width: 100%;
+  margin: 0;
+}
+.dc-syspg-view {
+  min-height: 28px;
+  padding: 0 var(--dc-s3);
+  border: 0;
+  border-radius: var(--dc-r);
+  background: none;
+  color: var(--oc-muted);
+  font: inherit;
+  font-size: 0.8125rem;
+  cursor: pointer;
+}
+.dc-syspg-view:hover {
+  color: var(--oc-fg);
+}
+.dc-syspg-view[aria-pressed='true'] {
+  background: var(--oc-elevated);
+  color: var(--oc-fg);
+  font-weight: 600;
+}
+.dc-syspg-view:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--oc-primary) 60%, transparent);
+  outline-offset: 1px;
+}
+.dc-syspg[data-previewing='true'] .dc-syspg-views,
+.dc-syspg[data-previewing='true'] .dc-sysscr,
+.dc-syspg[data-state='error'] .dc-sysscr,
+.dc-syspg[data-state='gone'] .dc-sysscr {
+  display: none;
+}
+.dc-sysscr {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  margin: var(--dc-s3) var(--dc-s4) var(--dc-s4);
+  overflow: hidden;
+  border: 1px solid var(--dc-hair);
+  border-radius: var(--dc-r-lg);
+  background: var(--oc-bg);
+}
+.dc-sysscr[hidden] {
+  display: none;
+}
+.dc-sysscr-bar {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: var(--dc-s1);
+  min-height: 36px;
+  padding: var(--dc-s1) var(--dc-s2) var(--dc-s1) var(--dc-s3);
+  border-bottom: 1px solid var(--dc-hair);
+}
+.dc-sysscr-bar[hidden] {
+  display: none;
+}
+.dc-sysscr-count {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.8125rem;
+}
+/* The rail is too narrow for the screen's name beside the controls: the name takes the first line, whole, and they the second. */
+.dc-sysscr[data-surface='panel'] .dc-sysscr-bar {
+  flex-wrap: wrap;
+  row-gap: 0;
+}
+.dc-sysscr[data-surface='panel'] .dc-sysscr-count {
+  order: -1;
+  flex: 1 0 100%;
+  padding-top: var(--dc-s1);
+  color: var(--oc-fg);
+  font-weight: 600;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.dc-sysscr[data-surface='panel'] .dc-sysscr-bar .dc-group {
+  margin-left: auto;
+}
+.dc-sysscr-wall {
+  position: relative;
+  inset: auto;
+  flex: 1;
+  min-height: 0;
+  cursor: grab;
+}
+.dc-sysscr-wall[data-panning='true'] {
+  cursor: grabbing;
+}
+.dc-sysscr-board {
+  /* A screen's own background shows through; where it sets none, the frame's scheme decides (light or dark). */
+  background: Canvas;
+  cursor: inherit;
+}
+.dc-sysscr-board .dc-frame {
+  background: Canvas;
+}
+.dc-sysscr-board .dc-placeholder {
+  background: var(--oc-subtle);
+  color-scheme: normal;
+}
+.dc-sysscr-board[data-tiny='true'] .dc-placeholder-title,
+.dc-sysscr-board[data-tiny='true'] .dc-placeholder-sub,
+.dc-sysscr-board[data-tiny='true'] .oc-sdk-spinner > span:not(.oc-sdk-spinner-ring) {
+  display: none;
+}
+.dc-sysscr[data-state='loading'] .dc-sysscr-wall,
+.dc-sysscr[data-state='empty'] .dc-sysscr-wall,
+.dc-sysscr[data-state='unreadable'] .dc-sysscr-wall,
+.dc-sysscr[data-state='unreadable'] .dc-sysscr-listwrap,
+.dc-sysscr[data-view='list'] .dc-sysscr-wall,
+.dc-sysscr:not([data-view='list']) .dc-sysscr-listwrap,
+.dc-sysscr[data-state='loading'] .dc-sysscr-listwrap,
+.dc-sysscr[data-state='empty'] .dc-sysscr-listwrap {
+  display: none;
+}
+.dc-sysscr-message {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--dc-s3);
+  padding: var(--dc-s5);
+  text-align: center;
+}
+.dc-sysscr-message:empty {
+  display: none;
+}
+.dc-sysscr-listwrap {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+.dc-sysscr-list {
+  margin: 0;
+  padding: var(--dc-s1) 0;
+  list-style: none;
+}
+.dc-sysscr-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  column-gap: var(--dc-s2);
+  width: 100%;
+  min-height: 44px;
+  padding: var(--dc-s2) var(--dc-s3);
+  border: 0;
+  background: none;
+  color: var(--oc-fg);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.dc-sysscr-row:hover {
+  background: var(--oc-hover);
+}
+.dc-sysscr-row:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--oc-primary) 60%, transparent);
+  outline-offset: -2px;
+}
+.dc-sysscr-row-name {
+  grid-column: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+}
+.dc-sysscr-row-meta {
+  grid-column: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.75rem;
+}
+.dc-sysscr-row-flag {
+  grid-column: 2;
+  grid-row: 1 / span 2;
+  color: var(--dc-warning-text);
+}
+.dc-sysscr-hint {
+  margin: 0;
+  padding: var(--dc-s2) var(--dc-s3) var(--dc-s3);
+  font-size: 0.75rem;
+}
+.dc-syspg[data-surface='panel'] .dc-syspg-views,
+.dc-syspg[data-surface='panel'][data-views='true'] .dc-syspg-stagehead {
+  margin: var(--dc-s2) var(--dc-s2) 0;
+}
+.dc-syspg[data-surface='panel'] .dc-sysscr {
+  margin: var(--dc-s2);
+}
+/* The rail's stage grows while it shows screens: a list worth scrolling, or a screen worth looking at. */
+.dc-syspg[data-surface='panel'][data-stage-view='screens'] .dc-syspg-stage {
+  flex-basis: 66%;
+}
+@media (max-width: 620px) {
+  .dc-syspg[data-surface='page'] .dc-syspg-views,
+  .dc-syspg[data-surface='page'][data-views='true'] .dc-syspg-stagehead {
+    margin: var(--dc-s2) var(--dc-s3) 0;
+  }
+  .dc-syspg[data-surface='page'] .dc-sysscr {
+    margin: var(--dc-s2) var(--dc-s3);
+  }
+}
+
 /* A system that didn't load has no board to show */
 .dc-syspg[data-state='error'] .dc-sys-board,
 .dc-syspg[data-state='gone'] .dc-sys-board {
@@ -4416,6 +4665,58 @@ button.dc-sp-value:focus-visible {
   border: 1px solid var(--dc-hair);
   border-radius: 999px;
   font-size: 0.75rem;
+}
+
+/* Motion: what a value is, beside its name */
+.dc-sp-kind {
+  font-size: 0.75rem;
+}
+
+/* Icons: the picture on a pale tile in either theme (a black or currentColor icon stays visible), then name and file */
+.dc-sp-icon-row {
+  display: flex;
+  align-items: center;
+  gap: var(--dc-s3);
+  min-width: 0;
+}
+.dc-sp-icon-tile {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  border: 1px solid var(--oc-border);
+  border-radius: var(--dc-r);
+  background: var(--oc-bg);
+}
+:root[data-oc-theme='dark'] .dc-sp-icon-tile {
+  background: var(--oc-fg);
+}
+.dc-sp-icon-tile[data-state='loading'] {
+  background: var(--oc-muted-surface);
+}
+.dc-sp-icon-tile[data-state='error'],
+.dc-sp-icon-tile[data-state='ready']:empty {
+  background: repeating-linear-gradient(45deg, transparent 0 4px, var(--dc-hair) 4px 5px);
+}
+.dc-sp-icon {
+  width: 24px;
+  height: 24px;
+  object-fit: contain;
+}
+.dc-sp-icon-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.dc-sp-icon-error {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--dc-s2);
+  padding-bottom: var(--dc-s2);
 }
 
 /* Colour pairs: the use, then one ground per scheme with its sample and ratio */

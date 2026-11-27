@@ -630,6 +630,17 @@ export type AssetsFromFolderResponse = { added: { file: string; kind: 'font' | '
 /** `proposal`: the preview board of the proposal waiting now (§5.14 step 4); not with `version`. */
 export type SystemBoardQuery = { version?: string; proposal?: string; scheme?: 'light' | 'dark' };
 
+// ---- system-builder-depth Phase 2, Wave 0 (§13 T12a) ----
+/**
+ * One system screen's render: `screen` is a `SYSTEM_ENTRY_ID_PATTERN` id listed in `system.json` `screens`;
+ * a version (default live) or the proposal waiting now, not both, as the board. Per screen, not per
+ * viewport: the frame sets the width, as `GET /designs/:slug/render` does. Answers `RenderMeta`.
+ * `scheme` (default light), as the board: it keys the render, so the page loads it again on a scheme
+ * change; the screen's own document is not rewritten (its `prefers-color-scheme` rules follow the frame).
+ */
+export type SystemScreenRenderQuery = { screen: string; version?: string; proposal?: string; scheme?: 'light' | 'dark' };
+// ---- end system-builder-depth Phase 2 ----
+
 export type SystemPromptPurpose =
   | 'make' | 'ask' | 'review' | 'resync-notes' | 'checks' | 'continue'
   | 'living-page' | 'reconcile' | 'build-continue';
@@ -920,6 +931,10 @@ export interface ApiRoutes {
   'GET /systems/:id/living-page/render/chunk': Route<RenderChunkQuery, undefined, RenderChunkResponse>;
   'POST /systems/:id/build/stop': Route<NoQuery, StopBuildBody, StopBuildResponse>;
   'POST /system-stops/:undoId/undo': Route<NoQuery, Record<string, never>, UndoStopResponse>;
+  // ---- system-builder-depth Phase 2 (§13 T12a) ----
+  'GET /systems/:id/screens/render': Route<SystemScreenRenderQuery, undefined, RenderMeta>;
+  'GET /systems/:id/screens/render/chunk': Route<RenderChunkQuery, undefined, RenderChunkResponse>;
+  // ---- end system-builder-depth Phase 2 ----
 }
 
 export type RouteKey = keyof ApiRoutes;
@@ -944,6 +959,7 @@ export type RouteResponse<K extends RouteKey> = ApiRoutes[K]['response'];
  * `U2` to `U6`: the Phase 1.5 sibling branch that fills the route (documentation/specs/phase-1-5-sdk-2-7.md §10.2).
  * `P2`: the Phase 2 task that fills the route (documentation/specs/phase-2-technical.md §16).
  * `P25`: the Phase 2.5 task that fills the route (documentation/specs/phase-2-5-technical.md §18).
+ * `SBD`: the system-builder-depth Phase 2 task that fills the route (documentation/specs/system-builder-depth.md §13).
  */
 export const ROUTE_OWNERS = {
   'GET /health': 'WP0',
@@ -1039,7 +1055,10 @@ export const ROUTE_OWNERS = {
   'POST /memberships': 'P26',
   'POST /systems/register': 'P26',
   'PUT /view': 'UP',
-} as const satisfies Record<RouteKey, 'WP0' | 'WP1' | 'WP2' | 'WP3' | 'U2' | 'U4' | 'U5' | 'U6' | 'P2' | 'P25' | 'P26' | 'UP'>;
+  // system-builder-depth Phase 2 (§13 T12a)
+  'GET /systems/:id/screens/render': 'SBD',
+  'GET /systems/:id/screens/render/chunk': 'SBD',
+} as const satisfies Record<RouteKey, 'WP0' | 'WP1' | 'WP2' | 'WP3' | 'U2' | 'U4' | 'U5' | 'U6' | 'P2' | 'P25' | 'P26' | 'UP' | 'SBD'>;
 
 export const ROUTE_KEYS = Object.keys(ROUTE_OWNERS) as RouteKey[];
 
@@ -1048,6 +1067,8 @@ export const RAW_TEXT_ROUTES: ReadonlySet<RouteKey> = new Set<RouteKey>([
   'GET /designs/:slug/render/chunk',
   'GET /systems/:id/board/chunk',
   'GET /systems/:id/living-page/render/chunk',
+  // system-builder-depth Phase 2 (§13 T12a)
+  'GET /systems/:id/screens/render/chunk',
 ]);
 
 export const splitRouteKey = <K extends RouteKey>(key: K): { method: RouteMethod<K>; pattern: RoutePattern<K> } => {

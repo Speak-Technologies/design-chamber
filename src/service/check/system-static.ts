@@ -21,7 +21,8 @@ import {
 } from '../../shared/limits.ts';
 import { missingTopics } from '../../shared/system-checklist.ts';
 import { AREA_OF_SECTION, layoutPlaceTakes, SYSTEM_AREAS, type SystemDetailSource } from '../../shared/system-json.ts';
-import type { ArtboardCheck, CheckBrowser, CheckFindingData, CheckParams, CheckReport, LivingPageState, ProposalPartName, ProposalProblemReason, RenderCheckState, SecretShapeKind, SystemArea, SystemDetail } from '../../shared/types.ts';
+import type { ArtboardCheck, CheckBrowser, CheckFindingData, CheckParams, CheckReport, LivingPageState, ProposalPartName, ProposalProblemReason, RenderCheckState, SecretShapeKind, SystemArea, SystemDetail, Viewport } from '../../shared/types.ts';
+import { findRawTextEnd, parseTagAt, RAW_TEXT_TAGS } from '../html-tags.ts';
 import { capPerCode } from './analyze.ts';
 import type { BoardPassId } from './board-analyze.ts';
 import { ratioText, staticLowPairs, type LowPair } from '../../shared/pair-contrast.ts';
@@ -41,6 +42,72 @@ const covers = (detail: SystemDetail, area: SystemArea): boolean => detail.cover
 
 /** Ignored hints that are known layouts in a place that doesn't take them. The listed ones are counted; past the list's cap the rest count as unknown. */
 const misplacedCount = (detail: SystemDetail): number => detail.boardLayout.ignored.filter((problem) => problem.reason === 'not-here').length;
+
+// ---- icons (system-builder-depth §4.6) ----
+
+/** `stroke-width` as an attribute or a style declaration; a value that is not a number is not read. */
+const STROKE_WIDTH = /(?<![\w-])stroke-width\s*(?:=\s*(?:["']\s*)?|:\s*)(\d{0,6}\.?\d{1,6})/gi;
+const VIEW_BOX = /(?<![\w-])viewBox\s*=\s*["']([^"']{1,100})["']/;
+/** Stroke widths read per icon file. */
+const ICON_STROKES_READ = 100;
+/** Different values named in the finding's detail, per kind. */
+const ICON_VALUES_SHOWN = 4;
+
+/** The text without its XML comments, by index (no backtracking over hostile input). */
+const withoutComments = (text: string): string => {
+  let out = '';
+  let from = 0;
+  for (;;) {
+    const open = text.indexOf('<!--', from);
+    if (open < 0) return out + text.slice(from);
+    out += `${text.slice(from, open)} `;
+    const close = text.indexOf('-->', open + 4);
+    if (close < 0) return out;
+    from = close + 3;
+  }
+};
+
+/**
+ * One icon's `viewBox` size (the root element's, as `24x24`) and stroke widths: a bounded attribute
+ * scan of the text, no DOM. The file is untrusted; only numbers come out of it.
+ */
+export const scanIcon = (svg: string): { viewBox: string | null; strokes: number[] } => {
+  const text = withoutComments(svg);
+  // Found by index: a pattern up to `>` would rescan the file from every unclosed `<svg`.
+  const open = text.search(/<svg\b/);
+  const close = open < 0 ? -1 : text.indexOf('>', open);
+  const root = close < 0 ? '' : text.slice(open, close);
+  const box = (VIEW_BOX.exec(root)?.[1] ?? '').trim().split(/[\s,]+/).map(Number);
+  const viewBox = box.length === 4 && box.every(Number.isFinite) ? `${box[2]}x${box[3]}` : null;
+  const strokes: number[] = [];
+  let read = 0;
+  for (const match of text.matchAll(STROKE_WIDTH)) {
+    if (read >= ICON_STROKES_READ) break;
+    read += 1;
+    const value = Number(match[1]);
+    if (Number.isFinite(value) && !strokes.includes(value)) strokes.push(value);
+  }
+  return { viewBox, strokes };
+};
+
+/** `system-icons-mixed`: the listed icons that could be read use more than one viewBox size or stroke width. */
+const iconFindings = (detail: SystemDetail, texts: Readonly<Record<string, string>>): CheckFindingData[] => {
+  // Icons are asked for with the foundations and drawn with the brand assets: either area covers them.
+  if (!covers(detail, 'foundations') && !covers(detail, 'brand')) return [];
+  const boxes = new Set<string>();
+  const strokes = new Set<number>();
+  for (const icon of detail.icons) {
+    const text = Object.hasOwn(texts, icon.file) ? texts[icon.file] : undefined;
+    if (text === undefined) continue;
+    const scanned = scanIcon(text);
+    if (scanned.viewBox !== null) boxes.add(scanned.viewBox);
+    for (const width of scanned.strokes) strokes.add(width);
+  }
+  const parts: string[] = [];
+  if (boxes.size > 1) parts.push(`viewBox ${[...boxes].slice(0, ICON_VALUES_SHOWN).join(', ')}`);
+  if (strokes.size > 1) parts.push(`stroke-width ${[...strokes].slice(0, ICON_VALUES_SHOWN).join(', ')}`);
+  return parts.length === 0 ? [] : [{ code: 'system-icons-mixed', file: 'system.json', screen: null, viewport: null, detail: cleanDetail(parts.join('; '), CHECK_DETAIL_MAX) }];
+};
 
 // ---- example labels (system-builder-depth D5, §4.5) ----
 
@@ -72,6 +139,89 @@ export const scanExampleLabels = (html: string): ExampleLabels => {
 
 /** Pattern kinds that are visual, so a full system shows them with a live example. */
 export const EXAMPLE_PATTERN_KINDS: readonly string[] = Object.freeze(['navigation', 'overlay', 'forms', 'data-display', 'feedback', 'states', 'page']);
+
+// ---- motion without a reduced-motion rule (system-builder-depth T10a) ----
+
+/** The properties that move something: a declaration of one, its longhands or a vendor form is motion. */
+export const MOTION_PROPERTIES: readonly string[] = Object.freeze(['transition', 'animation']);
+
+const MOTION_DECLARATION = new RegExp(`(?:^|[\\s{;])(?:-webkit-|-moz-|-o-)?(?:${MOTION_PROPERTIES.join('|')})(-[a-z]+)*\\s*:\\s*([^;}]*)`, 'gi');
+/** An `@media` prelude naming `prefers-reduced-motion` (either value: `reduce` undoes motion, `no-preference` adds it only when wanted). */
+const REDUCED_MEDIA = /@media\b[^{;]{0,500}prefers-reduced-motion/i;
+const REDUCED_ATTRIBUTE = /prefers-reduced-motion/i;
+
+/** `text` with its CSS comments cut out (an unclosed one runs to the end), in one pass. */
+const withoutCssComments = (text: string): string => {
+  let out = '';
+  let at = 0;
+  for (;;) {
+    const open = text.indexOf('/*', at);
+    if (open === -1) return out + text.slice(at);
+    out += `${text.slice(at, open)} `;
+    const close = text.indexOf('*/', open + 2);
+    if (close === -1) return out;
+    at = close + 2;
+  }
+};
+
+/**
+ * What an example's markup says about motion: the CSS of its `<style>` elements and `style` attributes
+ * (comments cut out, HTML comments and script text skipped), and whether a `<style media>` names reduced
+ * motion. One forward walk with the bundler's tag reader, so a hostile file costs linear time.
+ */
+const exampleCss = (html: string): { css: string[]; reducedMedia: boolean } => {
+  const css: string[] = [];
+  let reducedMedia = false;
+  let at = 0;
+  while (at < html.length) {
+    const lt = html.indexOf('<', at);
+    if (lt === -1) break;
+    if (html.startsWith('<!--', lt)) {
+      const close = html.indexOf('-->', lt + 4);
+      if (close === -1) break;
+      at = close + 3;
+      continue;
+    }
+    const tag = parseTagAt(html, lt);
+    if (tag === null) {
+      at = lt + 1;
+      continue;
+    }
+    for (const attr of tag.attrs) if (attr.name === 'style' && attr.value !== null) css.push(withoutCssComments(attr.value));
+    at = tag.end;
+    if (RAW_TEXT_TAGS.has(tag.lower) && !tag.selfClosing) {
+      const end = findRawTextEnd(html, at, tag.lower);
+      if (tag.lower === 'style') {
+        css.push(withoutCssComments(html.slice(at, end)));
+        if (tag.attrs.some((attr) => attr.name === 'media' && attr.value !== null && REDUCED_ATTRIBUTE.test(attr.value))) reducedMedia = true;
+      }
+      at = end;
+    }
+  }
+  return { css, reducedMedia };
+};
+
+/** Whether one example moves something (a motion declaration other than `none`) with no reduced-motion media query. */
+export const movesWithoutReducedMotion = (html: string): boolean => {
+  const { css, reducedMedia } = exampleCss(html);
+  const moves = css.some((chunk) => [...chunk.matchAll(MOTION_DECLARATION)].some((match) => (match[2] ?? '').trim().toLowerCase() !== 'none'));
+  return moves && !reducedMedia && !css.some((chunk) => REDUCED_MEDIA.test(chunk));
+};
+
+/**
+ * `system-motion-no-reduced`: one finding over every component, pattern or brand example of a covered
+ * area that moves without a reduced-motion rule; the count and up to three files. Each text is the
+ * bundled example (its stylesheets inlined) where the caller has it, else the file as written.
+ */
+const motionFindings = (detail: SystemDetail, texts: Readonly<Record<string, string>>): CheckFindingData[] => {
+  const files: string[] = [];
+  for (const entry of exampleEntries(detail)) {
+    const text = texts[entry.file];
+    if (text !== undefined && covers(detail, entry.area) && isDesignRelativeFile(entry.file) && movesWithoutReducedMotion(text)) files.push(entry.file);
+  }
+  const [first] = files;
+  return first === undefined ? [] : [{ code: 'system-motion-no-reduced', file: first, screen: null, viewport: null, params: { count: files.length }, detail: namesDetail(files) }];
+};
 
 /** The builder-depth findings (§4.5): examples, labels, pair contrast in Node, the coverage gap. */
 const depthFindings = (detail: SystemDetail, examples: Readonly<Record<string, string>>): CheckFindingData[] => {
@@ -143,7 +293,13 @@ const exampleEntries = (detail: SystemDetail): { area: SystemArea; file: string;
 ];
 
 /** What the static check reads beside the detail: the raw texts, the over-cap files, and each live example's text by its file. */
-export type SystemStaticSource = Pick<SystemDetailSource, 'texts' | 'tooLarge'> & { examples?: Readonly<Record<string, string>> };
+export type SystemStaticSource = Pick<SystemDetailSource, 'texts' | 'tooLarge'> & {
+  examples?: Readonly<Record<string, string>>;
+  /** Each live example bundled with its stylesheets inlined, by its file (the motion check reads these first). */
+  bundled?: Readonly<Record<string, string>>;
+  /** Each listed icon's text by its file (the mixed-set scan). */
+  icons?: Readonly<Record<string, string>>;
+};
 
 /**
  * Every static finding of one system, capped per code and in total like a design's. `source` is the
@@ -235,6 +391,9 @@ export const systemFindings = (source: SystemStaticSource, detail: SystemDetail)
     }
   }
 
+  out.push(...motionFindings(detail, { ...source.examples, ...source.bundled }));
+  out.push(...iconFindings(detail, source.icons ?? {}));
+
   if (detail.unreadable === null) out.push(...depthFindings(detail, source.examples ?? {}));
 
   return capPerCode(out).slice(0, CHECK_FINDINGS_MAX);
@@ -287,7 +446,7 @@ export const areaEmpty = (detail: SystemDetail, area: SystemArea): boolean => {
     case 'patterns':
       return detail.patterns.length === 0;
     case 'brand':
-      return detail.brand.length === 0 && detail.logos.length === 0;
+      return detail.brand.length === 0 && detail.logos.length === 0 && detail.icons.length === 0;
   }
 };
 
@@ -418,6 +577,12 @@ export type SystemCheckRender = {
   areas?: SystemArea[];
   /** The schemes drawn: light (both widths), dark (the wide dark pass), or both. */
   schemes?: ('light' | 'dark')[];
+  /**
+   * The system screens drawn (system-builder-depth T12b): one artboard per screen per viewport, in plan
+   * order, dark twins named `<viewport>-dark`; `viewports` names every size per screen, for the sentences. Absent
+   * when the run drew no screens.
+   */
+  screens?: { artboards: ArtboardCheck[]; viewports: (Viewport & { screen: string })[] };
 };
 
 /** One area at one width: its overview (the whole area scaled down) and its full-size tiles. */

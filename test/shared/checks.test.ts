@@ -307,6 +307,9 @@ test('Phase 2.5: every system code is in the closed table, with the spec severit
     'system-states-missing': 'warning',
     'system-contrast-low': 'warning',
     'system-coverage-gap': 'info',
+    // system-builder-depth Phase 2 (§13 T10a, T11).
+    'system-motion-no-reduced': 'warning',
+    'system-icons-mixed': 'info',
   };
   for (const [code, severity] of Object.entries(expected)) {
     assert.ok(isCheckCode(code), code);

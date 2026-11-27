@@ -1,7 +1,7 @@
 // A fake headless browser for the living page's example pictures (T14). It plays the CDP conversation
 // `living-examples.ts` holds: the document request is paused and answered by the service, every
 // reference in the served document is requested next (as a browser would), then load fires, and the
-// screenshot is a PNG header of the clip's size. Every command and every answer to a paused request
+// screenshot is a PNG header of the clip's size at the page's device scale. Every command and every answer to a paused request
 // is recorded, so a test can say scripts were disabled and nothing left.
 
 import type { CdpEvent, CdpSession } from '../../../src/service/check/cdp.ts';
@@ -93,6 +93,7 @@ export const createFakeBrowser = (options: FakeBrowserOptions = {}): FakeBrowser
     let next = 0;
     const pending = new Map<string, (answer: FakeRequest['answer'], params: Record<string, unknown>) => void>();
     const html = new Map<string, string>();
+    const scales = new Map<string, number>();
     const pause = (sessionId: string, url: string, then: (answer: FakeRequest['answer'], params: Record<string, unknown>) => void): void => {
       next += 1;
       const requestId = `r${next}`;
@@ -164,6 +165,9 @@ export const createFakeBrowser = (options: FakeBrowserOptions = {}): FakeBrowser
           case 'Fetch.failRequest':
             answer(p.requestId, 'fail', p);
             return reply({});
+          case 'Emulation.setDeviceMetricsOverride':
+            scales.set(sessionId ?? '', Number(p.deviceScaleFactor));
+            return reply({});
           case 'Page.getLayoutMetrics': {
             const height = heightOf(html.get(sessionId ?? '') ?? '');
             return reply({ cssContentSize: { width: 720, height } });
@@ -171,7 +175,8 @@ export const createFakeBrowser = (options: FakeBrowserOptions = {}): FakeBrowser
           case 'Page.captureScreenshot': {
             const clip = p.clip as { width: number; height: number };
             const doc = html.get(sessionId ?? '') ?? '';
-            return reply({ data: pngOfSize(clip.width * 2, clip.height * 2, doc.length).toString('base64') });
+            const scale = scales.get(sessionId ?? '') ?? 1;
+            return reply({ data: pngOfSize(clip.width * scale, clip.height * scale, doc.length).toString('base64') });
           }
           default:
             return reply({});

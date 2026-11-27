@@ -52,9 +52,12 @@ import {
   reviewFoot,
   reviewProgress,
   sectionOfHit,
+  screensSource,
+  screensTabShown,
   sourceText,
   unreviewedSections,
   type PhoneView,
+  type StageView,
 } from '../model/system-page-model.ts';
 import { RESYNC_NOTICE_MS } from '../model/resync-model.ts';
 import { REGENERATING_LABEL, livingCard, previewTarget, type LivingActionId, type LivingRepoView } from '../model/living-page-model.ts';
@@ -67,6 +70,8 @@ import { paintRepoReview } from './repo-review.ts';
 import { openResyncSheet, type ResyncApplied } from './resync-sheet.ts';
 import { sendSystemMessage } from './system-ask.ts';
 import { mountBoard, type BoardHandle } from './system-board.ts';
+import { createIconStore } from './system-icons.ts';
+import { mountSystemScreens, type ScreensHandle } from './system-screens.ts';
 import { mountSystemBuild, type SystemBuildHandle } from './system-build.ts';
 import { renderSection, type SectionContext } from './section-panel.ts';
 import { createSystemRestore, mountSystemVersions, type SystemRestore, type SystemVersionsHandle } from './system-versions.ts';
@@ -141,6 +146,10 @@ export const mountSystemPage = (options: SystemPageOptions): SystemPageHandle =>
   let askingNote = false;
   let reviewBusy = false;
   let phoneView: PhoneView = 'board';
+  /** The stage shows the specimen board or the system's screens (T13). */
+  let stageView: StageView = 'board';
+  /** The last detail whose `system.json` could be read: its screens stand in while the agent's write is half done. */
+  let lastReadable: SystemDetail | null = null;
   let disposed = false;
   let versionsSheet: { close: () => void } | null = null;
   let versions: SystemVersionsHandle | null = null;
@@ -176,6 +185,14 @@ export const mountSystemPage = (options: SystemPageOptions): SystemPageHandle =>
     },
     onState: () => undefined,
   });
+  const icons = createIconStore(id, () => {
+    if (!disposed && section === 'assets') paintPanel();
+  });
+  /** The board and the loaded screens both draw the system's files: a save, an undo, a restore or an agent turn redraws both. */
+  const reloadStage = (): void => {
+    board.reload();
+    screens.reload();
+  };
   const askLink = (): { sessionId: string | null; selectedId: string | null; selectedTitle: string | null } => {
     const selected = guestHost.session.get();
     return { sessionId: detail?.sessionId ?? null, selectedId: selected?.id ?? null, selectedTitle: selected?.title ?? null };
@@ -197,9 +214,18 @@ export const mountSystemPage = (options: SystemPageOptions): SystemPageHandle =>
     onLeave: () => (board.el.querySelector<HTMLElement>('iframe') ?? board.el).focus(),
   });
 
-  stage.append(board.el, askBar.el);
+  const screens: ScreensHandle = mountSystemScreens({ id, compact, onBoard: () => setStageView('board') });
+  // Built once and only relabelled, so a panel repaint never takes keyboard focus off the switch.
+  const viewButtons = {
+    board: h('button', { type: 'button', class: 'dc-syspg-view', 'aria-pressed': 'true', onClick: () => setStageView('board') }, 'Board'),
+    screens: h('button', { type: 'button', class: 'dc-syspg-view', 'aria-pressed': 'false', onClick: () => setStageView('screens') }, 'Screens'),
+  };
+  const views = h('div', { class: 'dc-syspg-views oc-segmented', role: 'group', 'aria-label': 'Show on the stage', hidden: true }, viewButtons.board, viewButtons.screens);
+  // The build strip floats over the board; with the switch on show it shares the switch's row instead (and wraps under it when
+  // the rail is too narrow for both), so it never covers the switch.
   const buildHost = h('div', { class: 'dc-syspg-build' });
-  stage.prepend(buildHost);
+  const stageHead = h('div', { class: 'dc-syspg-stagehead' }, views, buildHost);
+  stage.append(stageHead, board.el, screens.el, askBar.el);
   const build: SystemBuildHandle = mountSystemBuild({
     id,
     host: buildHost,
@@ -284,8 +310,11 @@ export const mountSystemPage = (options: SystemPageOptions): SystemPageHandle =>
       const nextLiving = await loadLiving(next);
       if (disposed || mine !== loadTicket) return;
       detail = next;
+      icons.invalidate();
       living = nextLiving;
       load = 'ready';
+      if (next.unreadable === null) lastReadable = next;
+      screens.setDetail(screensSource(next, lastReadable));
       if (!isCovered(next, section) && !expanded.size) section = SYSTEM_SECTIONS.find((candidate) => isCovered(next, candidate)) ?? 'overview';
       expanded.add(AREA_OF_SECTION[section]);
     } catch (error) {
@@ -305,8 +334,16 @@ export const mountSystemPage = (options: SystemPageOptions): SystemPageHandle =>
     applyWanted();
   };
 
+  function setStageView(next: StageView): void {
+    if (next === stageView) return;
+    stageView = next;
+    paintViews();
+    if (next === 'screens') screens.focus();
+  }
+
   const showBoard = (): void => {
     preview.close();
+    setStageView('board');
     phoneView = 'board';
     el.dataset.phoneView = phoneView;
     paintMobile();
@@ -377,7 +414,7 @@ export const mountSystemPage = (options: SystemPageOptions): SystemPageHandle =>
       await client.call('POST /systems/:id/edits/:eid/undo', { params: { id, eid: editId }, body: {} });
       showEditNotice('Undone', '', [], SHORT_NOTICE_MS);
       await reload();
-      board.reload();
+      reloadStage();
     } catch (error) {
       notices.setTransient('edit', banner({ tone: 'error', title: 'Couldn’t undo that', body: errorText(error) }));
     }
@@ -438,7 +475,7 @@ export const mountSystemPage = (options: SystemPageOptions): SystemPageHandle =>
     if (!detail || !canResync()) return;
     const applied = (result: ResyncApplied): void => {
       resyncedNotice(result);
-      void reload().then(() => board.reload());
+      void reload().then(() => reloadStage());
     };
     const repo = repoHome();
     if (repo !== null) {
@@ -484,6 +521,7 @@ export const mountSystemPage = (options: SystemPageOptions): SystemPageHandle =>
     if (!detail || !living) return;
     const target = previewTarget(living, detail);
     if (target === null) return;
+    setStageView('board');
     phoneView = 'board';
     el.dataset.phoneView = phoneView;
     el.dataset.previewing = 'true';
@@ -557,7 +595,7 @@ export const mountSystemPage = (options: SystemPageOptions): SystemPageHandle =>
           again.set({ loading: true });
           void reload().then(() => {
             editBase = detail;
-            board.reload();
+            reloadStage();
             notices.setTransient('edit', null);
           });
         },
@@ -584,7 +622,7 @@ export const mountSystemPage = (options: SystemPageOptions): SystemPageHandle =>
       paint();
       savedNotice(answer, '');
       await reload();
-      board.reload();
+      reloadStage();
       return true;
     } catch (error) {
       saving = false;
@@ -617,7 +655,7 @@ export const mountSystemPage = (options: SystemPageOptions): SystemPageHandle =>
         await reload();
         editBase = pending.size > 0 ? detail : null;
         board.setPreview(previewVars(pending));
-        board.reload();
+        reloadStage();
       })
       .catch((error: unknown) => {
         saving = false;
@@ -738,6 +776,7 @@ export const mountSystemPage = (options: SystemPageOptions): SystemPageHandle =>
   const setViewing = (next: Viewing | null): void => {
     viewing = next;
     board.setVersion(next?.id ?? null);
+    screens.setVersion(next?.id ?? null);
     syncAsk();
     paint();
   };
@@ -748,11 +787,12 @@ export const mountSystemPage = (options: SystemPageOptions): SystemPageHandle =>
     refresh: async () => {
       await reload();
       editBase = pending.size > 0 ? detail : null;
-      board.reload();
+      reloadStage();
     },
     onRestored: () => {
       viewing = null;
       board.setVersion(null);
+      screens.setVersion(null);
       syncAsk();
       paint();
       versions?.load().catch(() => undefined);
@@ -980,14 +1020,31 @@ export const mountSystemPage = (options: SystemPageOptions): SystemPageHandle =>
     propose,
     removeToken,
     selectEntry: (entry) => select(section, entry),
+    icons: () => icons.view((current.icons ?? []).map((icon) => icon.file)),
+    retryIcons: () => icons.retry(),
   });
+
+  /** The Board and Screens switch, and which of the two is on the stage. */
+  function paintViews(building = load === 'ready' && detail !== null && repoHome() !== null && detail.snapshot === null): void {
+    const shown = detail === null ? null : screensSource(detail, lastReadable);
+    const showTabs = !building && load === 'ready' && shown !== null && screensTabShown(shown, stageView);
+    if (!showTabs && stageView === 'screens' && (building || load !== 'ready')) stageView = 'board';
+    el.dataset.stageView = stageView;
+    el.dataset.views = String(showTabs);
+    views.hidden = !showTabs;
+    viewButtons.board.setAttribute('aria-pressed', String(stageView === 'board'));
+    viewButtons.screens.setAttribute('aria-pressed', String(stageView === 'screens'));
+    viewButtons.screens.textContent = shown !== null && shown.screens.length > 0 ? `Screens (${shown.screens.length})` : 'Screens';
+    board.el.hidden = building || stageView !== 'board';
+    screens.setActive(!building && stageView === 'screens');
+  }
 
   /** A repo-backed system the agent hasn't stamped yet has no snapshot to draw: say where it is and offer the two ways on. */
   function paintStage(): void {
     const repo = repoHome();
     const building = load === 'ready' && detail !== null && repo !== null && detail.snapshot === null;
     buildingEl.hidden = !building;
-    board.el.hidden = building;
+    paintViews(building);
     buildingEl.replaceChildren();
     if (!building || detail === null || repo === null) return;
     const waiting = detail.proposal !== null && detail.proposal.state === 'current';
@@ -1239,8 +1296,10 @@ export const mountSystemPage = (options: SystemPageOptions): SystemPageHandle =>
     if (refreshTimer !== null) clearTimeout(refreshTimer);
     refreshTimer = setTimeout(() => {
       refreshTimer = null;
-      void reload();
-      if (files && viewing === null) board.reload();
+      // The board and screens draw once the system is read again, so a half-written system.json is known before they ask.
+      void reload().then(() => {
+        if (files && viewing === null && !disposed) reloadStage();
+      });
     }, 300);
   });
   const stopSession = guestHost.session.subscribe(() => syncAsk());
@@ -1257,6 +1316,8 @@ export const mountSystemPage = (options: SystemPageOptions): SystemPageHandle =>
     build.dispose();
     askBar.dispose();
     board.dispose();
+    icons.dispose();
+    screens.dispose();
     notices.dispose();
     el.remove();
   });

@@ -491,7 +491,11 @@ export type CheckCode =
   | 'system-example-missing'
   | 'system-states-missing'
   | 'system-contrast-low'
-  | 'system-coverage-gap';
+  | 'system-coverage-gap'
+  // ---- system-builder-depth Phase 2, Wave 0 (§13 T10a, T11) ----
+  | 'system-motion-no-reduced'
+  | 'system-icons-mixed';
+  // ---- end system-builder-depth Phase 2 ----
 
 export type CheckSeverity = 'error' | 'warning' | 'info';
 
@@ -672,9 +676,14 @@ export type ExportFormat = 'zip' | 'html';
  */
 export type BoardLayout = 'card' | 'compact' | 'full' | 'table';
 
-/** The board's sections; `patterns` and `brand` are S8 (AD-22). */
+/**
+ * The board's sections; `patterns` and `brand` are S8 (AD-22). `motion` is system-builder-depth Phase 2
+ * (§13 T10a): a foundations section after `shadows`, and a token section (durations and easings).
+ */
 export type SystemSection =
-  | 'overview' | 'colours' | 'typography' | 'spacing' | 'radius' | 'shadows' | 'layers' | 'sizes'
+  | 'overview' | 'colours' | 'typography' | 'spacing' | 'radius' | 'shadows'
+  | 'motion'
+  | 'layers' | 'sizes'
   | 'components' | 'patterns' | 'brand' | 'assets';
 
 /** The sections a token can belong to (`other` shows at the end of Sizes). */
@@ -779,7 +788,9 @@ export type SystemTopicId =
   | 'state-colours' | 'data-colours' | 'control-sizes' | 'breakpoints' | 'elevation' | 'layers' | 'motion'
   | 'components' | 'examples' | 'focus-disabled'
   | 'voice' | 'navigation' | 'overlays' | 'forms' | 'feedback' | 'states' | 'data-display' | 'accessibility' | 'responsive'
-  | 'logo' | 'brand-colour' | 'imagery' | 'marketing';
+  | 'logo' | 'brand-colour' | 'imagery' | 'marketing'
+  // system-builder-depth Phase 2 (§13 T11): T11 adds it to `SYSTEM_TOPIC_IDS` with its rule.
+  | 'icons';
 
 /** Where a system lives (S8, AD-14): in the Designs folder, or read from a repo folder. */
 export type SystemHomeView =
@@ -1013,7 +1024,44 @@ export type SystemDetail = {
   pairs: SystemColourPair[];
   /** Checklist topics the agent marked out of scope (known ids only, each once). In no fingerprint. */
   outOfScope: SystemTopicId[];
+  // ---- system-builder-depth Phase 2, Wave 0 (§13 T11, T12a); absent `icons` and `screens` read as [] ----
+  /** `system.json` `icons`: SVG files under `assets/icons/`, ≤ `SYSTEM_ICONS_MAX`, drawn only as `<img>`. */
+  icons: SystemIcon[];
+  /** `system.json` `screens`: full documents `screens/<id>.html`, ≤ `SYSTEM_SCREENS_MAX`. */
+  screens: SystemScreen[];
+  /**
+   * `system.json` `viewports` (the design.json shape), the screens' default sizes; the default pair
+   * (Laptop 1280×800, Phone 390×844) when absent or invalid.
+   */
+  viewports: Viewport[];
+  // ---- end system-builder-depth Phase 2 ----
 };
+
+// ---- system-builder-depth Phase 2, Wave 0 (§13 T11, T12a) ----
+
+/** One icon (`system.json` `icons[]`); `file` is relative to the system folder, under `assets/icons/`. */
+export type SystemIcon = { file: string; name: string; note: string };
+
+/**
+ * What a system screen shows (§4.6): `page`, `pattern` and `state` fold into the patterns fingerprint,
+ * `marketing` into the brand fingerprint.
+ */
+export type SystemScreenKind = 'page' | 'pattern' | 'state' | 'marketing';
+
+/**
+ * One system screen (`system.json` `screens[]`, file `screens/<id>.html`). `viewports` is the screen's
+ * own list, which replaces the system's (fixed-size social and email templates, owner decision 5);
+ * null when the entry has none. `problem` is the entry's sentence (missing file, over the cap), else null.
+ */
+export type SystemScreen = {
+  id: string;
+  title: string;
+  kind: SystemScreenKind;
+  viewports: Viewport[] | null;
+  problem: string | null;
+};
+
+// ---- end system-builder-depth Phase 2 ----
 
 // ---- Phase 2.5: the system's own files (§2.5, §2.13, §2.15, §2.6, §2.8) ----
 

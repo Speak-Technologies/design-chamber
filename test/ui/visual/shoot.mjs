@@ -667,7 +667,8 @@ const emptyAndErrors = async () => {
 };
 
 // What the scenario modules (test/ui/visual/scenarios) use.
-const helpers = { openPage, check, checkSoon, listReady, thumbsReady, wallReady, menuItem, scaleLabel, sleep, outDir, root };
+// `debugPort`: a scenario that must look inside a sandboxed frame (its own process) attaches to that frame's DevTools target.
+const helpers = { openPage, check, checkSoon, listReady, thumbsReady, wallReady, menuItem, scaleLabel, sleep, outDir, root, debugPort };
 
 const plan = [];
 for (const theme of ['dark', 'light']) {

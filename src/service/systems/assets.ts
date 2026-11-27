@@ -3,7 +3,7 @@
 // user names (`POST /systems/:id/assets/from-folder`).
 //
 // Every file is checked twice, by its extension and by its content (`checkAsset`: magic bytes, or valid
-// UTF-8 without NUL for text and SVG), and by size (per type, then ≤ 200 files and ≤ 100 MB across the
+// UTF-8 without NUL for text and SVG), and by size (per type, then ≤ 400 files and ≤ 100 MB across the
 // system's `assets/` and `sources/`). Its name is made safe (`safeAssetName`: base name only, Windows
 // device names, clashes ignoring case). It is written to a dot temp inside the target folder and
 // published with `moveNoReplace`, so nothing already there is ever replaced, then recorded in
@@ -37,16 +37,20 @@ import { systemSelfWritesKey } from '../watch.ts';
 import { validateScanFolder } from './scan-folder.ts';
 import { ensureSystemStore, refuseReadOnly } from './store.ts';
 
-export type AssetKind = 'font' | 'logo' | 'source';
+/** `icon` is a file the agent writes and lists in `icons`; it is never uploaded. */
+export type AssetKind = 'font' | 'logo' | 'source' | 'icon';
+/** What a user can add as a brand file. */
+export type UploadKind = Exclude<AssetKind, 'icon'>;
 type AssetGroup = 'font' | 'image' | 'document';
 
 export const FOLDER_OF_KIND: Readonly<Record<AssetKind, readonly string[]>> = {
   font: ['assets', 'fonts'],
   logo: ['assets', 'logos'],
+  icon: ['assets', 'icons'],
   source: ['sources'],
 };
 
-const KIND_OF_GROUP: Readonly<Record<AssetGroup, AssetKind>> = { font: 'font', image: 'logo', document: 'source' };
+const KIND_OF_GROUP: Readonly<Record<AssetGroup, UploadKind>> = { font: 'font', image: 'logo', document: 'source' };
 
 const MAX_BYTES_OF_GROUP: Readonly<Record<AssetGroup, number>> = {
   font: SYSTEM_FONT_MAX_BYTES,
@@ -153,6 +157,7 @@ export const checkAssetMeta = (name: string, kind: AssetKind | null, size: numbe
   // A source may be any type a system takes (a brand guide, a picture of the brand); fonts and logos must be their own kind.
   if (resolvedKind === 'font' && type.group !== 'font') return { ok: false, reason: `${displayName(name)} isn't a font file.` };
   if (resolvedKind === 'logo' && type.group !== 'image') return { ok: false, reason: `${displayName(name)} isn't a logo picture. Use SVG, PNG, JPEG or WebP.` };
+  if (resolvedKind === 'icon' && extensionOf(name) !== 'svg') return { ok: false, reason: `${displayName(name)} isn't an SVG icon.` };
   if (size > MAX_BYTES_OF_GROUP[type.group]) return { ok: false, reason: `${displayName(name)} is too large. ${TOO_LARGE_OF_GROUP[type.group]}` };
   return { ok: true, group: type.group, kind: resolvedKind };
 };
@@ -234,7 +239,7 @@ export const guessLogoVariant = (file: string): string => {
 };
 
 /** The system.json list and entry for one added file (§2.3 shapes). */
-const entryOf = (rel: string, kind: AssetKind): { key: 'fonts' | 'logos' | 'sources'; entry: JsonObject } => {
+const entryOf = (rel: string, kind: UploadKind): { key: 'fonts' | 'logos' | 'sources'; entry: JsonObject } => {
   if (kind === 'font') return { key: 'fonts', entry: { file: rel, ...guessFontFace(rel) } };
   if (kind === 'logo') return { key: 'logos', entry: { file: rel, variant: guessLogoVariant(rel) } };
   return { key: 'sources', entry: { file: rel } };
@@ -247,7 +252,7 @@ const isObject = (value: unknown): value is JsonObject => typeof value === 'obje
  * kept; null when the file can't take them (not JSON, or a list key that is not a list). An entry whose
  * file is already listed is not added again.
  */
-export const withAssetEntries = (current: string | null, added: readonly { rel: string; kind: AssetKind }[]): string | null => {
+export const withAssetEntries = (current: string | null, added: readonly { rel: string; kind: UploadKind }[]): string | null => {
   let raw: JsonObject;
   if (current === null) raw = { version: 1 };
   else {
@@ -269,7 +274,7 @@ export const withAssetEntries = (current: string | null, added: readonly { rel: 
 
 /** Attempts of the system.json compare-and-swap before the file is left for the agent to record (§5.6). */
 const SYSTEM_JSON_CAS_ATTEMPTS = 3;
-/** Entries the measure of `assets/` and `sources/` looks at (the policy cap is 200 files). */
+/** Entries the measure of `assets/` and `sources/` looks at (the policy cap is `SYSTEM_FILES_MAX`). */
 const MEASURE_ENTRIES_MAX = 2000;
 const MEASURE_DEPTH_MAX = 4;
 /** Files of a folder the from-folder flow looks at (§5.6). */
@@ -336,9 +341,11 @@ export const ensureFolder = async (systemDir: string, segments: readonly string[
 type AddEnv = { ctx: ServiceContext; id: string; systemDir: string; totals: { files: number; bytes: number } };
 
 /** One checked file into its folder under a safe, unused name. Answers the system-relative path, or the refusal sentence. */
-const writeOne = async (env: AddEnv, name: string, kind: AssetKind | null, bytes: Buffer): Promise<{ rel: string; kind: AssetKind } | { reason: string }> => {
+const writeOne = async (env: AddEnv, name: string, kind: UploadKind | null, bytes: Buffer): Promise<{ rel: string; kind: UploadKind } | { reason: string }> => {
   const check = checkAsset(name, kind, bytes);
   if (!check.ok) return { reason: check.reason };
+  // Never asked for: `kind` is an upload kind, and a type's own kind is never `icon`.
+  if (check.kind === 'icon') return { reason: notAType(name) };
   if (env.totals.files >= SYSTEM_FILES_MAX) return { reason: `This design system already holds ${SYSTEM_FILES_MAX} files.` };
   if (env.totals.bytes >= SYSTEM_BYTES_MAX) return { reason: 'This design system already holds 100 MB of files.' };
   if (env.totals.bytes + bytes.length > SYSTEM_BYTES_MAX) return { reason: `${displayName(name)} would take this design system over 100 MB of files.` };
@@ -377,7 +384,7 @@ const writeOne = async (env: AddEnv, name: string, kind: AssetKind | null, bytes
 };
 
 /** Record the added files in system.json by compare-and-swap; false when it can't (the files stay either way). */
-const recordInSystemJson = async (env: AddEnv, added: readonly { rel: string; kind: AssetKind }[]): Promise<boolean> => {
+const recordInSystemJson = async (env: AddEnv, added: readonly { rel: string; kind: UploadKind }[]): Promise<boolean> => {
   let file: string;
   try {
     file = await resolvePlainTarget(env.systemDir, ['system.json'], { allowAbsent: true });
@@ -416,8 +423,8 @@ const recordInSystemJson = async (env: AddEnv, added: readonly { rel: string; ki
 const addUnderLock = async (
   ctx: ServiceContext,
   id: string,
-  files: AsyncIterable<{ name: string; kind: AssetKind | null; bytes: Buffer } | { name: string; reason: string }>,
-): Promise<{ added: { rel: string; kind: AssetKind; bytes: number }[]; refused: { name: string; reason: string }[]; recorded: boolean }> => {
+  files: AsyncIterable<{ name: string; kind: UploadKind | null; bytes: Buffer } | { name: string; reason: string }>,
+): Promise<{ added: { rel: string; kind: UploadKind; bytes: number }[]; refused: { name: string; reason: string }[]; recorded: boolean }> => {
   const store = ensureSystemStore(ctx);
   const result = await store.withLock(id, async () => {
     const systemDir = await store.dir(id);
@@ -426,7 +433,7 @@ const addUnderLock = async (
     // so a home adopted while the request waited is honoured before anything is written.
     refuseReadOnly(state);
     const env: AddEnv = { ctx, id, systemDir, totals: await measure(systemDir) };
-    const added: { rel: string; kind: AssetKind; bytes: number }[] = [];
+    const added: { rel: string; kind: UploadKind; bytes: number }[] = [];
     const refused: { name: string; reason: string }[] = [];
     for await (const file of files) {
       if ('reason' in file) {
@@ -456,7 +463,7 @@ const addUnderLock = async (
 };
 
 /** `POST /systems/:id/assets`: the upload is taken once (it is gone whatever the answer). */
-export const addSystemAsset = async (ctx: ServiceContext, id: string, input: { uploadId: string; name: string; kind: AssetKind }): Promise<AddSystemAssetResponse> => {
+export const addSystemAsset = async (ctx: ServiceContext, id: string, input: { uploadId: string; name: string; kind: UploadKind }): Promise<AddSystemAssetResponse> => {
   const store = ensureSystemStore(ctx);
   await store.dir(id); // 404 before the upload is consumed
   const state = await store.readState(id);
@@ -498,7 +505,7 @@ export type FolderFilesDeps = {
 export async function* folderFiles(
   directory: string,
   deps: FolderFilesDeps = {},
-): AsyncGenerator<{ name: string; kind: AssetKind | null; bytes: Buffer } | { name: string; reason: string }> {
+): AsyncGenerator<{ name: string; kind: UploadKind | null; bytes: Buffer } | { name: string; reason: string }> {
   const statOf = deps.statOf ?? ((handle: FileHandle): Promise<{ isFile(): boolean; size: number }> => handle.stat());
   let listed: Dirent[];
   try {
@@ -546,7 +553,8 @@ export async function* folderFiles(
         if (bytesRead === 0) break;
         filled += bytesRead;
       }
-      yield { name: entry.name, kind: bySize.kind, bytes: bytes.subarray(0, filled) };
+      // `byName` and `bySize` were checked with no kind, so this is the type's own, never `icon`.
+      yield { name: entry.name, kind: bySize.kind as UploadKind, bytes: bytes.subarray(0, filled) };
     } finally {
       await handle.close();
     }

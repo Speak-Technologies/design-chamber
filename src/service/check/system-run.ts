@@ -10,14 +10,17 @@ import path from 'node:path';
 
 import { cleanDetail, normalizeExternalUrl } from '../../shared/checks.ts';
 import {
+  CHECK_ARTBOARD_TIMEOUT_MS,
   CHECK_FINDINGS_MAX,
   SYSTEM_CHECK_BOARD_TIMEOUT_MS,
   CHECK_DETAIL_MAX,
   SYSTEM_CHECK_OPTIONAL_TILES_TIME_SHARE,
   SYSTEM_CHECK_PNGS_MAX,
   SYSTEM_CHECK_RENDER_BUDGET_MS,
+  SYSTEM_CHECK_SCREENS_BUDGET_MS,
   SYSTEM_CHECK_TILE_PIXELS_MAX,
   SYSTEM_EXAMPLE_MAX,
+  SYSTEM_SCREEN_MAX,
 } from '../../shared/limits.ts';
 import { findSecretShapes } from '../../shared/secret-shapes.ts';
 import { isBoardEntryKey, parseEntryKey } from '../../shared/system-board.ts';
@@ -30,17 +33,19 @@ import { resolvePlainTarget, writeFileAtomic } from '../paths.ts';
 import { createSelfWrites } from '../self-writes.ts';
 import { assembleBoardHtml, bundleExamples, overlaySource, readProposalBoardSource } from '../systems/board-assemble.ts';
 import { BOARD_ENTRY_FILE } from '../systems/board-html.ts';
+import { exampleFileOf, exampleKeyOf, ICON_DRAWN_MAX_BYTES } from '../systems/specimen-html.ts';
 import { committedStateOf, readCommitted, readRecord } from '../systems/living-page.ts';
 import { readProposalProblem } from '../systems/proposal-record.ts';
 import { createSystemStore, repoLabelOf, type SystemStore } from '../systems/store.ts';
 import { analyzeBoard, boardFindings, boardPassesOf, DARK_PASS_AREAS, findingsInArea, measuredLowPairs, passShare, sanitizeBoardProbe, type BoardProbePair } from './board-analyze.ts';
 import { staticLowPairs } from '../../shared/pair-contrast.ts';
 import { pictureCoverage, planBoardPictures, type PictureCoverage } from './board-pictures.ts';
-import { browserClassOf, openCheckRun } from './engine.ts';
+import { browserClassOf, CheckUsageError, openCheckRun } from './engine.ts';
 import { checkBrowserArgs, launchOpenOptions, openCdp } from './cdp.ts';
 import { ensureChamberDir } from './output.ts';
 import { PngStitchError, stitchPngs } from './png-stitch.ts';
-import { CHECK_RUN_DEADLINE_MS, renderArtboards, type InspectPage, type InspectResult, type PlannedArtboard } from './render.ts';
+import { CHECK_RUN_DEADLINE_MS, renderArtboards, type InspectPage, type InspectResult, type LoadedDocument, type PlannedArtboard, type RenderOutcome } from './render.ts';
+import { dedupeDarkScreenFindings, planScreenArtboards, screenSkippedFindings, type ScreenPlan } from './system-screens.ts';
 import { areaEmpty, contrastFindings, s8Findings, systemCheckReport, systemFindings, type S8Facts, type SystemBoardShot, type SystemCheckRender, type SystemCheckReport } from './system-static.ts';
 
 export type SystemCheckRun = {
@@ -61,14 +66,51 @@ export type SystemRenderInput = {
   isRoot: boolean;
   signal?: AbortSignal;
   tmpdir?: string;
-  /** Time limits; the defaults are SYSTEM_CHECK_BOARD_TIMEOUT_MS and SYSTEM_CHECK_RENDER_BUDGET_MS. Tests shorten them. */
-  budgets?: { boardMs?: number; runMs?: number };
+  /**
+   * Time limits; the defaults are SYSTEM_CHECK_BOARD_TIMEOUT_MS (one board pass), SYSTEM_CHECK_RENDER_BUDGET_MS
+   * (the whole render), SYSTEM_CHECK_SCREENS_BUDGET_MS (the screens' share of it) and CHECK_ARTBOARD_TIMEOUT_MS
+   * (one screen artboard). Tests shorten them.
+   */
+  budgets?: { boardMs?: number; runMs?: number; screensMs?: number; screenMs?: number };
   /** Test seam: replaces the render loop (so a test can see what the run hands it), as `RunCheckInput.render`. */
   renderLoop?: typeof renderArtboards;
   /** `--area`: picture and measure one area only (the board is still drawn whole). Absent or null: every area. */
   area?: SystemArea | null;
   /** `--scheme`: which passes to draw. Absent or null: both when the system has a dark value, else light. */
   scheme?: 'light' | 'dark' | 'both' | null;
+  /**
+   * `--screen` (system-builder-depth T12b): draw only these system screens and skip the board. Each must be
+   * listed in `screens`; not with `area`. Absent, null or empty: the board, then every screen.
+   */
+  screens?: readonly string[] | null;
+};
+
+/** `--screen` and `--area` together (the CLI and the tool refuse it first; this guards every caller). */
+export const SCREEN_WITH_AREA_SENTENCE = "--screen can't be combined with --area: --screen checks only those screens and skips the board.";
+/** A `--screen` id the system doesn't list. */
+export const unknownSystemScreenSentence = (id: string): string => `There is no screen "${cleanDetail(id, 40)}" in this design system. Its system.json lists the screens.`;
+
+const NO_OUTCOME: RenderOutcome = Object.freeze({ artboards: [], findings: [], notRendered: 0, stoppedBy: null, unavailable: false });
+
+/**
+ * One system screen as the check draws it: read through the source (contained, no link out), within the
+ * character cap, bundled in export mode (no bridge placeholder), as the design check bundles a screen.
+ */
+export const loadSystemScreen = async (source: FileSource, rel: string): Promise<LoadedDocument> => {
+  const file = await source.read(rel).catch((error: unknown) => {
+    if (error instanceof RefBlocked) return null;
+    throw error;
+  });
+  if (file === null) return { ok: false, reason: 'missing' };
+  const text = file.bytes.toString('utf8');
+  // Over the cap since the detail was read: not drawn (the next run names it as too long).
+  if (text.length > SYSTEM_SCREEN_MAX) return { ok: false, reason: 'missing' };
+  try {
+    return { ok: true, html: (await bundleDocument(overlaySource(source, text, rel), rel, { mode: 'export' })).html };
+  } catch (error) {
+    if (error instanceof BundleTooLarge) return { ok: false, reason: 'too-large' };
+    throw error;
+  }
 };
 
 const SYSTEM_OWNER = "This design system's" as const;
@@ -155,6 +197,25 @@ export const readExampleTexts = async (source: FileSource, detail: SystemDetail)
   return out;
 };
 
+/**
+ * Each listed icon's text by its file, for the mixed-set scan (system-builder-depth §4.6). Read like the
+ * examples, through the live file source; a file too large to be drawn, missing or refused is left out.
+ */
+export const readIconTexts = async (source: FileSource, detail: SystemDetail): Promise<Record<string, string>> => {
+  const out: Record<string, string> = {};
+  for (const { file: rel } of detail.icons) {
+    try {
+      const info = (await source.stat?.(rel)) ?? null;
+      if (info === null || info.size > ICON_DRAWN_MAX_BYTES) continue;
+      const file = await source.read(rel);
+      if (file !== null && file.bytes.length <= ICON_DRAWN_MAX_BYTES) out[rel] = file.bytes.toString('utf8');
+    } catch (error) {
+      if (!(error instanceof RefBlocked)) throw error;
+    }
+  }
+  return out;
+};
+
 const fileOfEntry = (entry: string): string => {
   const key = parseEntryKey(entry);
   return key !== null && key.kind === 'component' ? `components/${key.key}.html` : BOARD_FILE;
@@ -179,7 +240,16 @@ export const runSystemCheck = async (
   const examples = await readExampleTexts(liveSource, detail);
   // Each example bundled on its own, so its remote refs are known to the file checks too (KI-39); the reader leaves them empty.
   const bundled = await bundleExamples(detail, liveSource);
-  const staticFindings = [...systemFindings({ ...source, examples }, { ...detail, components: bundled.components, patterns: bundled.patterns, brand: bundled.brand }), ...s8Findings(source, detail, facts)].slice(0, CHECK_FINDINGS_MAX);
+  // The motion check reads each example with its stylesheets inlined, by its file.
+  const bundledByFile: Record<string, string> = {};
+  for (const [kind, entries] of [['component', detail.components], ['pattern', detail.patterns], ['brand', detail.brand]] as const) {
+    for (const entry of entries) {
+      const html = bundled.examples[exampleKeyOf(kind, entry.id)];
+      if (html !== undefined) bundledByFile[exampleFileOf(kind, entry.id)] = html;
+    }
+  }
+  const icons = await readIconTexts(liveSource, detail);
+  const staticFindings = [...systemFindings({ ...source, examples, bundled: bundledByFile, icons }, { ...detail, components: bundled.components, patterns: bundled.patterns, brand: bundled.brand }), ...s8Findings(source, detail, facts)].slice(0, CHECK_FINDINGS_MAX);
   const base = { id, findings: staticFindings, now: input.now, tool: input.tool };
   const staticRun: SystemCheckRun = { report: systemCheckReport(base), detail, reportPath: null, pngs: [] };
   const renderInput = input.render;
@@ -192,6 +262,13 @@ export const runSystemCheck = async (
   const drawDetail = proposal === null ? detail : proposal.detail;
   const drawSource: FileSource = proposal === null ? createLiveFileSource(await store.filesDir(id)) : proposal.source;
   const drawn: SystemCheckRender['drawn'] = proposal === null ? { from: 'system', proposal: null } : { from: 'proposal', proposal: proposal.proposalId };
+
+  // --screen (T12b): known ids only, never with --area; refused before anything is drawn or written.
+  const onlyScreens = renderInput.screens === undefined || renderInput.screens === null || renderInput.screens.length === 0 ? null : [...new Set(renderInput.screens)];
+  if (onlyScreens !== null) {
+    if ((renderInput.area ?? null) !== null) throw new CheckUsageError(SCREEN_WITH_AREA_SENTENCE);
+    for (const screenId of onlyScreens) if (!drawDetail.screens.some((screen) => screen.id === screenId)) throw new CheckUsageError(unknownSystemScreenSentence(screenId));
+  }
 
   const writeStaticRender = async (render: SystemCheckRender): Promise<SystemCheckRun> => {
     await ensureChamberDir(systemDir, SYSTEM_OWNER);
@@ -216,12 +293,18 @@ export const runSystemCheck = async (
   // The passes (D8): both light widths, then the dark pass when the system has a dark value and --scheme allows it.
   const passes = boardPassesOf(renderInput.scheme ?? null, drawDetail.tokens.some((token) => token.dark !== null));
   const onlyArea = renderInput.area ?? null;
+  // The schemes drawn, for the board and the screens alike (light, dark, or both when the system has dark values).
+  const schemes = [...new Set(passes.map((pass) => pass.scheme))];
+  // --screen skips the board; --area pictures one board area and draws no screens.
+  const boardRuns = onlyScreens === null;
+  const screenPlan: ScreenPlan = onlyArea === null ? planScreenArtboards(drawDetail, { only: onlyScreens, schemes }) : { plan: [], overLimit: [], viewports: [] };
+  const screensDrawn = screenPlan.plan.length > 0 || screenPlan.overLimit.length > 0;
 
   // The board documents, bundled like the design check's (export mode, no bridge placeholder): one per scheme drawn.
   const documents = new Map<string, string>();
   const remote: string[] = [];
   try {
-    for (const scheme of [...new Set(passes.map((pass) => pass.scheme))]) {
+    for (const scheme of boardRuns ? schemes : []) {
       // Every section laid out now (eager), so the areas measure their real height and every tile paints.
       const assembled = await assembleBoardHtml(drawDetail, drawSource, scheme, { eager: true });
       remote.push(...[...assembled.components, ...assembled.patterns, ...assembled.brand].flatMap((entry) => entry.example?.remote ?? []));
@@ -341,10 +424,17 @@ export const runSystemCheck = async (
     owner: SYSTEM_OWNER,
   });
   try {
-    const outcome = await (renderInput.renderLoop ?? renderArtboards)({
-      // The launch options carry the abort signal and, for a restart, only what is left of the run.
-      openBrowser: (launch) =>
-        openCdp(browserPath, checkBrowserArgs({ workDir: space.workDir, platform: renderInput.platform, isRoot: renderInput.isRoot, join: path.join }), launchOpenOptions(launch, BROWSER_START_MS)),
+    const loop = renderInput.renderLoop ?? renderArtboards;
+    // The launch options carry the abort signal and, for a restart, only what is left of the run.
+    const openBrowser: Parameters<typeof renderArtboards>[0]['openBrowser'] = (launch) =>
+      openCdp(browserPath, checkBrowserArgs({ workDir: space.workDir, platform: renderInput.platform, isRoot: renderInput.isRoot, join: path.join }), launchOpenOptions(launch, BROWSER_START_MS));
+    // The budget (§16): with screens to draw after the board, the board keeps 70 s of the 110 s and the
+    // screens get 40 s; --screen alone gets all of it. Both share the run's deadline, under the tool's 180 s kill.
+    const runMs = renderInput.budgets?.runMs ?? SYSTEM_CHECK_RENDER_BUDGET_MS;
+    const screensMs = Math.min(runMs, renderInput.budgets?.screensMs ?? SYSTEM_CHECK_SCREENS_BUDGET_MS);
+    const boardRunMs = screensDrawn ? runMs - screensMs : runMs;
+    const outcome = !boardRuns ? NO_OUTCOME : await loop({
+      openBrowser,
       deadlineAt,
       // The dark pass runs last, so a run out of time cuts it first and keeps the light results.
       plan: passes.map((pass) => ({
@@ -363,11 +453,42 @@ export const runSystemCheck = async (
       savePng: space.savePng,
       inspect,
       artboardTimeoutMs: renderInput.budgets?.boardMs ?? SYSTEM_CHECK_BOARD_TIMEOUT_MS,
-      runBudgetMs: renderInput.budgets?.runMs ?? SYSTEM_CHECK_RENDER_BUDGET_MS,
+      runBudgetMs: boardRunMs,
       ...(renderInput.signal ? { signal: renderInput.signal } : {}),
     });
 
     await space.checkAborted(renderInput.signal?.aborted === true || outcome.stoppedBy === 'aborted');
+
+    // The screens (T12b): the design check's own path (no inspect), so the design probe and analyze.ts judge
+    // each screen at each viewport; the dark twins are emulated in `prefers-color-scheme: dark`.
+    const screenDocuments = new Map<string, Promise<LoadedDocument>>();
+    const screenOutcome: RenderOutcome =
+      screenPlan.plan.length === 0
+        ? NO_OUTCOME
+        : outcome.unavailable
+          ? { ...NO_OUTCOME, unavailable: true, notRendered: screenPlan.plan.length }
+          : await loop({
+              openBrowser,
+              deadlineAt,
+              plan: screenPlan.plan,
+              kind: 'page',
+              loadDocument: (file) => {
+                const known = screenDocuments.get(file);
+                if (known !== undefined) return known;
+                const loading = loadSystemScreen(drawSource, file);
+                screenDocuments.set(file, loading);
+                return loading;
+              },
+              probeSource: renderInput.probeSource,
+              knownExternal,
+              // `screen-<id>@<viewport>.png` (`-dark` for the dark twins, `-2` for a second slice).
+              savePng: (art, slice, slices, bytes) => space.savePng(art, slice, slices, bytes, `screen-${art.screen ?? 'screen'}`),
+              artboardTimeoutMs: renderInput.budgets?.screenMs ?? CHECK_ARTBOARD_TIMEOUT_MS,
+              runBudgetMs: boardRuns ? screensMs : runMs,
+              ...(renderInput.signal ? { signal: renderInput.signal } : {}),
+            });
+
+    await space.checkAborted(renderInput.signal?.aborted === true || screenOutcome.stoppedBy === 'aborted');
 
     const findings: CheckFindingData[] = boardFindings(outcome.findings, CHECK_FINDINGS_MAX);
     // Pairs Node couldn't judge from the values, as the board painted them (a pair judged statically is not judged again),
@@ -392,23 +513,43 @@ export const runSystemCheck = async (
         findings.push({ code: 'system-board-partial', file: BOARD_FILE, screen: null, viewport: null, params: { pictured: kind, count: areas.length }, detail: cleanDetail(areas.join('; '), CHECK_DETAIL_MAX) });
       }
     }
-    if (outcome.unavailable) {
+    // The screens' findings after the board's, a dark twin's repeats dropped, then what was left out and why.
+    findings.push(
+      ...dedupeDarkScreenFindings(screenOutcome.findings, screenPlan.plan),
+      ...screenSkippedFindings({ overLimit: screenPlan.overLimit, notRendered: screenPlan.plan.slice(screenPlan.plan.length - screenOutcome.notRendered), stoppedBy: screenOutcome.stoppedBy }),
+    );
+    if (outcome.unavailable || screenOutcome.unavailable) {
       findings.push({ code: 'render-failed', file: null, screen: null, viewport: null, detail: "This browser build can't be driven. Set another browser in Settings." });
     }
-    const okCount = outcome.artboards.filter((artboard) => artboard.ok).length;
-    const state: RenderCheckState = outcome.unavailable || okCount === 0 ? 'failed' : okCount < passes.length ? 'partial' : 'done';
+    const unavailable = outcome.unavailable || screenOutcome.unavailable;
+    const planned = (boardRuns ? passes.length : 0) + screenPlan.plan.length;
+    const okCount = [...outcome.artboards, ...screenOutcome.artboards].filter((artboard) => artboard.ok).length;
+    const state: RenderCheckState =
+      unavailable || (planned > 0 && okCount === 0) ? 'failed' : okCount < planned || screenPlan.overLimit.length > 0 ? 'partial' : 'done';
     // A width that failed after saving tiles names none of them: the report keeps only what it pictures.
     const kept = new Set(outcome.artboards.flatMap((artboard) => artboard.pngs));
     const keptShots = shots
       .map((shot) => ({ ...shot, overview: shot.overview !== null && kept.has(shot.overview.png) ? shot.overview : null, tiles: shot.tiles.filter((tile) => kept.has(tile.png)) }))
       .filter((shot) => shot.overview !== null || shot.tiles.length > 0);
     const keptEntryShots = entryShots.map((shot) => ({ ...shot, pngs: shot.pngs.filter((rel) => kept.has(rel)) })).filter((shot) => shot.pngs.length > 0);
-    const areas = SYSTEM_AREAS.filter((area) => (onlyArea === null ? drawDetail.coverage.includes(area) || !areaEmpty(drawDetail, area) : area === onlyArea));
-    const schemes = [...new Set(passes.map((pass) => pass.scheme))];
-    const render: SystemCheckRender = { state, browser: browserClassOf(browserPath), drawn, widths: outcome.artboards, shots: keptShots, entryShots: keptEntryShots, findings, areas, schemes };
+    // --screen draws no board area.
+    const areas = !boardRuns ? [] : SYSTEM_AREAS.filter((area) => (onlyArea === null ? drawDetail.coverage.includes(area) || !areaEmpty(drawDetail, area) : area === onlyArea));
+    const render: SystemCheckRender = {
+      state,
+      browser: browserClassOf(browserPath),
+      drawn,
+      widths: outcome.artboards,
+      shots: keptShots,
+      entryShots: keptEntryShots,
+      // Capped when screens add theirs; a board-only run keeps its findings exactly as before.
+      findings: screensDrawn ? findings.slice(0, CHECK_FINDINGS_MAX) : findings,
+      areas,
+      schemes,
+      ...(screensDrawn ? { screens: { artboards: screenOutcome.artboards, viewports: screenPlan.viewports } } : {}),
+    };
     const report = systemCheckReport({ ...base, findings: reportStatic, render });
     const reportPath = await writeSystemCheckReport(systemDir, report);
-    const keptRels = outcome.artboards.flatMap((artboard) => artboard.pngs);
+    const keptRels = [...outcome.artboards, ...screenOutcome.artboards].flatMap((artboard) => artboard.pngs);
     await space.finish(keptRels, input.now.getTime());
     return { report, detail, reportPath, pngs: keptRels.map((rel) => path.join(systemDir, ...rel.split('/'))) };
   } finally {

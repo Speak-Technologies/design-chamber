@@ -248,7 +248,8 @@ describe('patch: rename, review, ready, chat', () => {
 
     const ready = await store.patch('acme', { status: 'ready' });
     assert.equal(ready.system.status, 'ready');
-    assert.deepEqual(ready.readyNote, { unreviewed: 11 });
+    // One more than before: the motion section (system-builder-depth Phase 2) is not reviewed.
+    assert.deepEqual(ready.readyNote, { unreviewed: 12 });
     assert.equal(ready.system.changesToReview, false);
 
     // The agent changes the colours: that review is gone and the Ready system has changes to review.
@@ -272,7 +273,7 @@ describe('patch: rename, review, ready, chat', () => {
     await writeFile(tmp.at('_systems/acme/system.json'), JSON.stringify({ coverage: ['foundations'] }));
     await rejectsWith(store.patch('acme', { review: { section: 'brand', state: 'looks-good' } }), 'invalid');
     const ready = await store.patch('acme', { status: 'ready' });
-    assert.deepEqual(ready.readyNote, { unreviewed: 8 });
+    assert.deepEqual(ready.readyNote, { unreviewed: 9 });
   });
 
   test('the linked chat is set and cleared; a repo living-page switch is refused for an internal home', async (t) => {

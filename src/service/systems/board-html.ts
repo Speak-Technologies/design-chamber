@@ -11,12 +11,22 @@
 import { AREA_OF_SECTION, SYSTEM_AREAS, SYSTEM_SECTIONS } from '../../shared/system-json.ts';
 import type { SystemArea, SystemDetail, SystemSection } from '../../shared/types.ts';
 import { markdownCss } from './markdown-html.ts';
-import { AREA_TITLES, escapeHtml, renderSpecimenSection, specimenSystemCss, type ExampleEntry } from './specimen-html.ts';
+import { AREA_TITLES, CURRENT_COLOR_CSS, escapeHtml, GROUND_TEXT, renderSpecimenSection, specimenSystemCss, type ExampleEntry } from './specimen-html.ts';
 
 export { escapeHtml } from './specimen-html.ts';
 
-/** Bumped when the generated document changes shape, so cached boards are not reused (7: pattern and brand examples, colour pairs). */
-export const BOARD_GENERATOR_VERSION = 7;
+/**
+ * Bumped when the generated document changes shape, so cached boards are not reused (8: motion specimens, the icon grid;
+ * 9: a motion demo plays under the pointer the page reports, `BOARD_POINTER_VAR`).
+ */
+export const BOARD_GENERATOR_VERSION = 9;
+
+/**
+ * The page's click layer lies over the board's frame, so the frame never sees the pointer and `:hover` never matches. The page
+ * reports where the pointer is (frame px, "x y") as this custom property on `<html>`, through the same token preview message it
+ * uses for the host theme; the board script plays the motion demo under that point. Advisory only: it moves a chip.
+ */
+export const BOARD_POINTER_VAR = '--dc-board-pointer';
 
 /** The virtual entry the board is bundled from (never a file on disk). */
 export const BOARD_ENTRY_FILE = '__board.html';
@@ -27,6 +37,8 @@ export type BoardHtmlOptions = {
   examples?: Readonly<Record<string, string>>;
   /** Font and logo files (`assets/…`) the service's `checkAsset` refused. */
   unusable?: ReadonlySet<string>;
+  /** Icon files tinted to the ground's text colour (`paintsOnlyCurrentColor`). */
+  tinted?: ReadonlySet<string>;
   /**
    * Lay every section out now instead of leaving off-screen ones to `content-visibility: auto`. The visual check sets it: a
    * skipped section keeps its 480px placeholder height and paints nothing, so areas would measure short and tiles come out
@@ -63,8 +75,9 @@ body { margin: 0; padding: 32px 40px 64px; background: var(--dc-board-bg, ${f.bg
 .dc-note { margin-top: 4px; font-size: 12px; color: var(--dc-board-muted, ${f.muted}); white-space: pre-wrap; overflow-wrap: anywhere; }
 .dc-problem { margin-top: 4px; font-size: 12px; }
 .dc-grounds { display: flex; gap: 8px; margin-bottom: 8px; }
-.dc-ground { flex: 1; padding: 8px; border-radius: calc(var(--dc-board-radius, 8px) - 2px); background: ${f.ground}; color: #1d1d1f; }
-.dc-ground.dc-dark { background: ${f.darkGround}; color: #ececef; }
+.dc-ground { flex: 1; padding: 8px; border-radius: calc(var(--dc-board-radius, 8px) - 2px); background: ${f.ground}; color: ${GROUND_TEXT.light}; }
+.dc-ground.dc-dark { background: ${f.darkGround}; color: ${GROUND_TEXT.dark}; }
+${CURRENT_COLOR_CSS}
 .dc-swatch { height: 48px; border-radius: 4px; border: 1px solid rgb(127 127 127 / 0.3); }
 .dc-hatched { background: repeating-linear-gradient(45deg, rgb(127 127 127 / 0.45) 0 2px, transparent 2px 8px); }
 .dc-hatched-label { font-size: 11px; }
@@ -79,6 +92,26 @@ body { margin: 0; padding: 32px 40px 64px; background: var(--dc-board-bg, ${f.bg
   background: var(--dc-board-card, ${f.card}); border: 1px solid var(--dc-board-border, ${f.border}); overflow: hidden; }
 .dc-example { display: block; min-height: 32px; overflow: auto; }
 .dc-list { margin: 0; padding-left: 18px; }
+/* An icon card's two grounds stack, so every size fits the card's width (they wrap inside a ground). */
+.dc-icons .dc-grounds { flex-direction: column; }
+.dc-icons .dc-ground { flex: 0 0 auto; min-width: 0; }
+/* Motion: the curve, the duration bar, and a track whose chip moves while hovered or focused (never under reduced motion). */
+.dc-motion-hint { margin-bottom: 8px; }
+.dc-curve { display: block; width: 96px; max-width: 100%; height: auto; margin: 0 auto; }
+.dc-motion-track { padding: 4px 0; }
+.dc-motion-demo { position: relative; height: 20px; margin-top: 8px; border-radius: 10px; background: rgb(127 127 127 / 0.2); }
+.dc-motion-demo:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; }
+.dc-motion-chip { position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 8px; background: currentColor; transition-property: left; transition-duration: 600ms; transition-timing-function: linear; }
+.dc-motion-demo:hover .dc-motion-chip, .dc-motion-demo:focus .dc-motion-chip { left: calc(100% - 18px); }
+@media (prefers-reduced-motion: reduce) {
+  .dc-motion-chip { transition: none !important; }
+  .dc-motion-demo:hover .dc-motion-chip, .dc-motion-demo:focus .dc-motion-chip { left: 2px; }
+}
+/* Played under the pointer the page reports (BOARD_POINTER_VAR), as on hover; still under reduced motion. */
+.dc-motion-demo.dc-playing .dc-motion-chip { left: calc(100% - 18px); }
+@media (prefers-reduced-motion: reduce) {
+  .dc-motion-demo.dc-playing .dc-motion-chip { left: 2px; }
+}
 .dc-logo { max-width: 100%; max-height: 96px; display: block; margin: 0 auto; }
 .dc-text p, .dc-body p { margin: 0 0 8px; white-space: pre-wrap; overflow-wrap: anywhere; }
 /* A readable measure: guidance, overview and note text (paragraphs, markdown lists and quotes) stops at about 90 characters, whatever the layout's width. */
@@ -234,7 +267,29 @@ const BOARD_SCRIPT = `(function () {
   window.addEventListener('resize', schedule);
   window.addEventListener('load', schedule);
   if (document.fonts && document.fonts.ready) document.fonts.ready.then(schedule);
-  if (window.MutationObserver) new MutationObserver(schedule).observe(document.documentElement, { attributes: true, attributeFilter: ['style'] });
+  // The motion demo under the pointer the page reports (BOARD_POINTER_VAR) plays, as it would on hover.
+  var playing = null;
+  var play = function () {
+    var raw = getComputedStyle(document.documentElement).getPropertyValue('${BOARD_POINTER_VAR}').trim().split(/\\s+/);
+    var x = Number(raw[0]);
+    var y = Number(raw[1]);
+    var under = raw.length === 2 && isFinite(x) && isFinite(y) ? document.elementFromPoint(x, y) : null;
+    var demo = under && under.closest ? under.closest('.dc-motion-demo') : null;
+    if (demo === playing) return;
+    if (playing) playing.classList.remove('dc-playing');
+    playing = demo;
+    if (playing) playing.classList.add('dc-playing');
+  };
+  // Only a change other than the pointer can move a preview's width, so the pointer alone never measures again.
+  var pointerFree = function () { return (document.documentElement.getAttribute('style') || '').replace(/${BOARD_POINTER_VAR}:[^;]*;?/, ''); };
+  var lastStyle = pointerFree();
+  var styleChanged = function () {
+    var next = pointerFree();
+    if (next !== lastStyle) { lastStyle = next; schedule(); }
+    play();
+  };
+  if (window.MutationObserver) new MutationObserver(styleChanged).observe(document.documentElement, { attributes: true, attributeFilter: ['style'] });
+  play();
   if (cards.length > 0) widen();
 })();`;
 
@@ -260,7 +315,7 @@ export const buildBoardHtml = (detail: SystemDetail, options: BoardHtmlOptions):
   const sub = detail.empty
     ? '<p class="dc-board-sub">This design system has nothing in it yet. Ask the agent to fill it in.</p>'
     : `<p class="dc-board-sub">${escapeHtml(detail.status === 'ready' ? 'Ready' : 'Draft')}</p>`;
-  const specimen = { unusable, example: boardExample(examples, hasDark(detail)) };
+  const specimen = { unusable, tinted: options.tinted ?? new Set<string>(), example: boardExample(examples, hasDark(detail)) };
   const areas = AREA_SECTIONS.map(({ area, sections }) => areaBlock(area, sections.map((section) => renderSpecimenSection(detail, section, specimen)).join('')));
   const body = [heading, sub, ...areas].join('');
   return documentOf(title, options.scheme, specimenSystemCss(detail, unusable), body, true, options.eager === true);

@@ -14,11 +14,11 @@
 
 import { LIVING_PAGE_MARK_NAME, SYSTEM_ENTRY_ID_PATTERN, SYSTEM_TOKEN_NAME_PATTERN } from '../../shared/limits.ts';
 import { darkVarOf, typeVarOf } from '../../shared/system-board.ts';
-import { AREA_OF_SECTION, SYSTEM_AREAS, SYSTEM_SECTIONS } from '../../shared/system-json.ts';
+import { AREA_OF_SECTION, screenAreaOf, SYSTEM_AREAS, SYSTEM_SECTIONS } from '../../shared/system-json.ts';
 import type { SystemArea, SystemDetail, SystemSection } from '../../shared/types.ts';
 import { LIVING_VIEWPORT, livingCssProblems } from './living-safe.ts';
 import { markdownCss } from './markdown-html.ts';
-import { AREA_TITLES, escapeHtml, renderSpecimenSection, specimenSystemCss, type ExampleEntry } from './specimen-html.ts';
+import { AREA_TITLES, CURRENT_COLOR_CSS, escapeHtml, GROUND_TEXT, renderSpecimenSection, specimenSystemCss, type ExampleEntry } from './specimen-html.ts';
 
 /** The virtual entry the living page is bundled from (never a file on disk). */
 export const LIVING_ENTRY_FILE = '__living.html';
@@ -61,6 +61,8 @@ export type LivingPageInput = {
   fontsLeftOut?: readonly { file: string; reason: 'too-large' | 'budget' | 'unsafe' }[];
   /** Font and logo files (`assets/…`) that can't be used (refused by `checkAsset`, a type the page can't carry, over budget). */
   unusable?: ReadonlySet<string>;
+  /** Icon files tinted to the ground's text colour (`paintsOnlyCurrentColor`). */
+  tinted?: ReadonlySet<string>;
   /** Each example's pictures, by example key (`exampleKeyOf`: a component's id, `pattern:<id>`, `brand:<id>`). */
   examples?: Readonly<Record<string, readonly LivingExampleShot[]>>;
   /** A proposal preview (§5.14): no mark, and a band naming the proposal and the home it isn't from yet. */
@@ -173,8 +175,9 @@ body { margin: 0; background: #f7f7f8; color: #1d1d1f; font-family: system-ui, -
 .dc-note { margin-top: 4px; font-size: 12px; color: #62626a; white-space: pre-wrap; overflow-wrap: anywhere; }
 .dc-problem { margin-top: 4px; font-size: 12px; }
 .dc-grounds { display: flex; gap: 8px; margin-bottom: 8px; }
-.dc-ground { flex: 1; padding: 8px; border-radius: 6px; background: #ffffff; color: #1d1d1f; }
-.dc-ground.dc-dark { background: #18181b; color: #ececef; }
+.dc-ground { flex: 1; padding: 8px; border-radius: 6px; background: #ffffff; color: ${GROUND_TEXT.light}; }
+.dc-ground.dc-dark { background: #18181b; color: ${GROUND_TEXT.dark}; }
+${CURRENT_COLOR_CSS}
 .dc-swatch { height: 48px; border-radius: 4px; border: 1px solid rgb(127 127 127 / 0.3); }
 .dc-hatched { background: repeating-linear-gradient(45deg, rgb(127 127 127 / 0.45) 0 2px, transparent 2px 8px); }
 .dc-hatched-label { font-size: 11px; }
@@ -187,6 +190,11 @@ body { margin: 0; background: #f7f7f8; color: #1d1d1f; font-family: system-ui, -
 .dc-stack { position: relative; height: 120px; }
 .dc-layer { position: absolute; width: 140px; height: 56px; padding: 6px; border-radius: 6px; font-size: 11px; background: #ffffff; border: 1px solid #d8d8dc; overflow: hidden; }
 .dc-list { margin: 0; padding-left: 18px; }
+/* An icon card's two grounds stack, so every size fits the card's width (they wrap inside a ground). */
+.dc-icons .dc-grounds { flex-direction: column; }
+.dc-icons .dc-ground { flex: 0 0 auto; min-width: 0; }
+.dc-curve { display: block; width: 96px; max-width: 100%; height: auto; margin: 0 auto; }
+.dc-motion-track { padding: 4px 0; }
 .dc-logo { max-width: 100%; max-height: 96px; display: block; margin: 0 auto; }
 .dc-text p, .dc-body p { margin: 0 0 8px; white-space: pre-wrap; overflow-wrap: anywhere; }
 /* A readable measure: guidance, overview and note text (paragraphs, markdown lists and quotes) stops at about 90 characters, whatever the layout's width. */
@@ -223,6 +231,10 @@ body { margin: 0; background: #f7f7f8; color: #1d1d1f; font-family: system-ui, -
 .lp-example { margin: 0; }
 .lp-example img { display: block; max-width: 100%; height: auto; border: 1px solid #d8d8dc; border-radius: 6px; background: #ffffff; }
 .lp-example figcaption { font-size: 11px; color: #62626a; margin-top: 2px; }
+.lp-screens { display: grid; gap: 24px; }
+.lp-screen h4 { margin: 0 0 8px; font-size: 15px; font-weight: 600; }
+.lp-screen-shots { display: flex; flex-wrap: wrap; gap: 16px; align-items: flex-start; }
+.lp-screen-shots > .lp-example { max-width: 100%; min-width: 0; }
 .lp-footer { margin-top: 48px; padding-top: 16px; border-top: 1px solid #d8d8dc; color: #62626a; font-size: 13px; }
 .lp-footer p { margin: 0 0 4px; }
 .lp-footer ul { margin: 4px 0 0; padding-left: 18px; }`;
@@ -242,6 +254,7 @@ const SECTION_TITLES: Readonly<Record<SystemSection, string>> = {
   spacing: 'Spacing',
   radius: 'Radius',
   shadows: 'Shadows',
+  motion: 'Motion',
   layers: 'Layers',
   sizes: 'Sizes',
   components: 'Components',
@@ -370,6 +383,40 @@ const exampleFigures =
     return (figures.length > 0 ? `<div class="lp-examples">${figures.join('')}</div>` : '') + missing.map((sentence) => `<p class="dc-muted">${escapeHtml(sentence)}</p>`).join('');
   };
 
+/** A screen picture's key among the page's pictures; `screen:` is never part of a component id. */
+export const screenShotKey = (screen: string, viewport: string): string => `screen:${screen}@${viewport}`;
+
+/** The sentence for a screen with no picture (the board's words for an example), and why when it isn't the screen's doing. */
+export const SCREEN_NOT_SHOWN_SENTENCE = "This example couldn't be shown.";
+
+const PICTURE = /^[A-Za-z0-9+/]+={0,2}$/;
+
+/**
+ * The screens of one area (system-builder-depth T14): each with its title and a picture per viewport,
+ * labelled with the viewport and its size. A picture only: nothing of the screen's markup is written.
+ */
+const screenPictures = (detail: SystemDetail, area: 'patterns' | 'brand', examples: Readonly<Record<string, readonly LivingExampleShot[]>>): string => {
+  const screens = detail.screens.filter((screen) => screenAreaOf(screen.kind) === area);
+  if (screens.length === 0) return '';
+  const cards = screens.map((screen) => {
+    const figures = (screen.viewports ?? detail.viewports).map((viewport) => {
+      const key = screenShotKey(screen.id, viewport.id);
+      const shot = Object.hasOwn(examples, key) ? examples[key]?.[0] : undefined;
+      const png = shot?.png ?? null;
+      const reason = shot?.reason ?? 'render-failed';
+      const picture =
+        png !== null && PICTURE.test(png.base64) && Number.isInteger(png.width) && Number.isInteger(png.height)
+          ? `<img src="data:image/png;base64,${png.base64}" alt="${escapeHtml(`${screen.title}, ${viewport.label}`)}" width="${png.width}" height="${png.height}">`
+          : `<p class="dc-muted">${escapeHtml(reason === 'render-failed' ? SCREEN_NOT_SHOWN_SENTENCE : `${SCREEN_NOT_SHOWN_SENTENCE} ${EXAMPLE_REASON_SENTENCES[reason]}`)}</p>`;
+      return `<figure class="lp-example">${picture}<figcaption>${escapeHtml(`${viewport.label} · ${viewport.width} × ${viewport.height}`)}</figcaption></figure>`;
+    });
+    // The mark is dropped from the page; it names the screen for a secret-shape hit in its text.
+    const mark = SYSTEM_ENTRY_ID_PATTERN.test(screen.id) ? ` data-dc-entry="screen:${screen.id}"` : '';
+    return `<article class="lp-screen"${mark}><h4>${escapeHtml(screen.title)}</h4><div class="lp-screen-shots">${figures.join('')}</div></article>`;
+  });
+  return `<h3>Screens</h3><div class="lp-screens">${cards.join('')}</div>`;
+};
+
 const PREVIEW_CSS = '.lp-preview { margin: 0; padding: 10px 24px; background: #fdf3d7; color: #4a3b0b; border-bottom: 1px solid #e6d29a; font: 600 14px/1.4 system-ui, sans-serif; }';
 
 /** The preview's top band (§5.11 rev 3). */
@@ -401,7 +448,7 @@ export const buildLivingPage = (detail: SystemDetail, input: LivingPageInput): L
   // The body, with the board's entry marks, then the marks turned into ranges.
   const areas: string[] = [];
   for (const { area, sections } of AREA_SECTIONS) {
-    const rendered = sections.map((section) => renderSpecimenSection(shown, section, { unusable, styleClass, markdown: 'living', example: exampleFigures(input.examples ?? {}) })).join('\n');
+    const rendered = sections.map((section) => renderSpecimenSection(shown, section, { unusable, tinted: input.tinted ?? new Set<string>(), still: true, styleClass, markdown: 'living', example: exampleFigures(input.examples ?? {}), screens: (area) => screenPictures(shown, area, input.examples ?? {}) })).join('\n');
     areas.push(`<div class="lp-area" id="lp-area-${area}" role="group" aria-label="${escapeHtml(AREA_TITLES[area])}"><p class="lp-area-title" aria-hidden="true">${escapeHtml(AREA_TITLES[area])}</p>\n${rendered}\n</div>`);
   }
   const { text: body, marks } = stripEntryMarks(redact(areas.join('\n')));
