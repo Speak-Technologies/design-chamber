@@ -104,7 +104,7 @@ export const desiredPinTexts = (input: {
   for (const pin of input.settings.systemPins ?? []) {
     const directory = path.resolve(pin.directory);
     if (out.has(directory) || isInsideOrEqual(input.designsRoot, directory)) continue;
-    const target = pin.choice === 'system' ? pin.id : pin.choice === 'default' && fallback?.choice === 'system' ? fallback.id : undefined;
+    const target = pin.choice === 'system' ? pin.id : pin.choice === 'follow-default' && fallback?.choice === 'system' ? fallback.id : undefined;
     const system = target === undefined ? undefined : input.systems.find((one) => one.id === target && one.status === 'ready' && one.unreadable === null);
     if (system !== undefined) out.set(directory, buildPinInstruction(system.name));
   }

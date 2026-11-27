@@ -208,8 +208,8 @@ export const createFakeDesignSystem = (deps: {
   const pinOf = (pin: SystemPinSetting): SystemPinView => {
     if (pin.choice !== 'system' || pin.id === undefined) return { ...pin, state: 'ok', sentence: null };
     const system = row(pin.id);
-    if (system === undefined) return { ...pin, state: 'missing', sentence: `${pin.name ?? pin.id} isn’t in this Designs folder. This project uses the default.` };
-    if (system.status === 'draft') return { ...pin, name: system.name, state: 'draft', sentence: `${system.name} is a draft. This project uses the default until it is Ready.` };
+    if (system === undefined) return { ...pin, state: 'missing', sentence: `${pin.name ?? pin.id} isn’t in this Designs folder. This project uses the project’s own design files, or your default.` };
+    if (system.status === 'draft') return { ...pin, name: system.name, state: 'draft', sentence: `${system.name} is a draft. Until it is Ready, this project uses the project’s own design files, or your default.` };
     return { ...pin, name: system.name, state: 'ok', sentence: null };
   };
 

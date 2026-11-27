@@ -167,8 +167,11 @@ export type AgentOwnedField = 'title' | 'updated' | 'viewports' | 'screens' | 'd
 export type ServiceState = Pick<DesignJson, Exclude<ServiceOwnedField, 'version'>> & {
   version: 1;
   provisional?: true;
-  /** The design's system decision: `ask` until answered, `none` or `system` after a link action. */
-  systemDecision?: 'ask' | 'none' | 'system';
+  /**
+   * The design's system decision: `ask` until answered, `none` or `system` after a link action, `project` when it
+   * was made to follow its project's own design files (use-the-project spec §1.4; written once at creation).
+   */
+  systemDecision?: 'ask' | 'none' | 'system' | 'project';
   /** The last design.json `systemChoice` value the service acted on (an id or `"none"`). */
   systemChoiceSeen?: string;
   /** Why the agent's recorded choice could not be acted on. */
@@ -282,8 +285,11 @@ export type SettingsFile = {
 /** The default system choice for new designs (§2.9); a system is named by id, resolved against the current root. */
 export type SystemDefaultSetting = { choice: 'ask' } | { choice: 'none' } | { choice: 'system'; id: string; name: string };
 
-/** A project pin (§2.9): `default` follows the default, `none` never links, `system` names one. */
-export type SystemPinSetting = { directory: string; choice: 'default' | 'none' | 'system'; id?: string; name?: string };
+/**
+ * A project pin (§2.9; use-the-project spec §1.4). No pin = Use the project. `follow-default` = Use my default, `none`
+ * never links, `system` names one. A legacy `default` pin is dropped on read (it reads as Use the project).
+ */
+export type SystemPinSetting = { directory: string; choice: 'follow-default' | 'none' | 'system'; id?: string; name?: string };
 
 /** Whether a setting's system still resolves in this root (§3.4); `sentence` says why when not ok. `missing`: not in this Designs folder, or unreadable. */
 export type SystemSettingState = 'ok' | 'draft' | 'missing';
@@ -1186,12 +1192,17 @@ export type SystemQuestionSet = { roundOne: SystemQuestion[]; roundTwo: SystemQu
 
 // ---- Phase 2.5: the effective choice for a new design (§2.9, RS S5-1) ----
 
-/** Why a system was chosen: the New dialog, a project pin, or the default. */
-export type SystemChoiceWhy = 'explicit' | 'pinned' | 'default';
+/** Why a system was chosen: the New dialog, a project pin, the default, or because it is the project's own system. */
+export type SystemChoiceWhy = 'explicit' | 'pinned' | 'default' | 'project';
 
-/** `none-silent`: ask, but no Ready system exists in this root, so behave as before (no ask, nothing linked). */
+/**
+ * `none-silent`: ask, but no Ready system exists in this root, so behave as before (no ask, nothing linked).
+ * `project`: link nothing and follow the project's own design files (use-the-project spec §1.2); `why: 'default'`
+ * means no pin said otherwise.
+ */
 export type EffectiveSystemChoice =
   | { choice: 'system'; id: string; why: SystemChoiceWhy }
+  | { choice: 'project'; why: 'explicit' | 'pinned' | 'default' }
   | { choice: 'none'; why: SystemChoiceWhy }
   | { choice: 'ask' }
   | { choice: 'none-silent' };

@@ -3,14 +3,14 @@
 // route tests go through bearer auth and path decoding exactly as the host's proxy does.
 
 import assert from 'node:assert/strict';
-import { mkdir } from 'node:fs/promises';
+import { mkdir, readFile } from 'node:fs/promises';
 import type { AddressInfo } from 'node:net';
 import path from 'node:path';
 import type { TestContext } from 'node:test';
 
 import { noProject, type AgentContext } from '../../src/shared/agent/context.ts';
-import { createDesignDocument, defaultViewports, serializeJson } from '../../src/shared/design-json.ts';
-import type { Comment, JsonObject } from '../../src/shared/types.ts';
+import { createDesignDocument, defaultViewports, normalizeServiceState, serializeJson } from '../../src/shared/design-json.ts';
+import type { Comment, JsonObject, ServiceState } from '../../src/shared/types.ts';
 import type { CreateDesignInput, DesignRecord, DesignStore, ServiceContext } from '../../src/service/context.ts';
 import { createRouter, createServiceServer, listenLoopback } from '../../src/service/http.ts';
 import { registerChatRoutes } from '../../src/service/routes/chat.ts';
@@ -68,9 +68,21 @@ export const createChatContext = (tmp: TmpRoot, overrides: Partial<ServiceContex
     return record;
   };
 
+  /** The service-owned system fields, written to state.json as the real store does (the chip records its decision). */
+  const updateSystemState = async (slug: string, mutate: (state: ServiceState) => ServiceState | null): Promise<ServiceState> => {
+    const file = `${slug}/.chamber/state.json`;
+    const state = normalizeServiceState(JSON.parse(await readFile(tmp.at(file), 'utf8')));
+    if (state === null) throw new Error(`state.json of ${slug} is not valid`);
+    const next = mutate(state);
+    if (next === null) return state;
+    await tmp.write(file, serializeJson(next as unknown as JsonObject));
+    return next;
+  };
+
   const store = new Proxy(base.store, {
     get(target, property, receiver) {
       if (property === 'create') return create;
+      if (property === 'updateSystemState') return updateSystemState;
       if (property === 'onCreate') {
         return (hook: (record: DesignRecord) => Promise<void>) => {
           hooks.push(hook);

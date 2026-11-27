@@ -73,9 +73,12 @@ export const systemFieldOf = (input: SystemFieldInput, chosen: string | null, fo
   const effective = effectiveSystemChoice({
     explicit: chosen,
     projectDirectory: input.projectDirectory,
+    // Until the dialog offers Use the project (use-the-project spec T4), it keeps the 0.7.0 rules: no project rung,
+    // so no system's owner is read.
+    project: { state: 'no-project', found: false },
     designsRoot: input.designsRoot,
     settings: { systemDefault: input.settings?.default, systemPins: input.settings?.pins },
-    systems: input.systems.map((system) => ({ id: system.id, status: system.status })),
+    systems: input.systems.map((system) => ({ id: system.id, status: system.status, name: system.name, belongsTo: null, repo: false, updated: system.updated })),
     foldsCase,
   });
   if (ready.length === 0 || effective.choice === 'none-silent') return { empty: ready.length === 0, options: [], value: SYSTEM_NONE, hint: null, showPreset: true, send: undefined };

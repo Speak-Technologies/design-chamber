@@ -104,9 +104,13 @@ const validateSystemPins = (raw: unknown): SystemPinSetting[] | null | undefined
   if (raw === null) return null;
   if (!Array.isArray(raw)) throw new ApiError('bad-request', 'The project pins must be a list of { "directory", "choice" } entries.');
   if (raw.length > SYSTEM_PINS_MAX) throw new ApiError('bad-request', `You can pin at most ${SYSTEM_PINS_MAX} projects. Remove one first.`);
+  // The file reads a legacy `default` pin as Use the project; a client sending one has an old option list (spec §1.5).
+  if (raw.some((entry) => isBodyRecord(entry) && entry.choice === 'default')) {
+    throw new ApiError('bad-request', 'Pick Use the project, Use my default, No design system or a design system.');
+  }
   const pins = normalizeSystemPins(raw);
   if (pins.length !== raw.length) {
-    throw new ApiError('bad-request', 'Each project pin needs a full folder path, a choice of "default", "none" or "system", and a system id and name for "system". A folder can be pinned once.');
+    throw new ApiError('bad-request', 'Each project pin needs a full folder path, a choice of "follow-default", "none" or "system", and a system id and name for "system". A folder can be pinned once.');
   }
   return pins;
 };

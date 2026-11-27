@@ -60,7 +60,7 @@ import {
   VERSION_ID_PATTERN,
 } from '../../shared/limits.ts';
 import { COPY_DIR, componentDiff, parseCopyRecordText, tokenDiff } from '../../shared/system-copy.ts';
-import { effectiveSystemChoice } from '../../shared/systems.ts';
+import { choiceSystemsOf, effectiveSystemChoice, PROJECT_CHOICE } from '../../shared/systems.ts';
 import type { EffectiveSystemChoice } from '../../shared/types.ts';
 import { ensureLinkService, LINK_NO_COPY_MESSAGE, LINK_SYSTEM_GONE_MESSAGE, linkDraftMessage } from '../systems/link.ts';
 import { ensureSystemStore, SYSTEM_GONE_MESSAGE } from '../systems/store.ts';
@@ -106,11 +106,14 @@ export const projectDirectoryOf = (value: unknown): string | null => {
   return value;
 };
 
-/** The New dialog's design-system choice (Phase 2.5 §3.2): a system id, `none` or `ask`; absent → null. */
+/**
+ * The New dialog's design-system choice (Phase 2.5 §3.2): a system id, `none`, `ask` or Use the project
+ * (`PROJECT_CHOICE`, use-the-project spec §1.4); absent → null.
+ */
 const chipSystemOf = (value: unknown): string | null => {
   if (value === undefined || value === null) return null;
-  if (typeof value === 'string' && (value === 'none' || value === 'ask' || SYSTEM_ID_PATTERN.test(value))) return value;
-  throw new ApiError('bad-request', 'That is not a design system choice. Pick a design system, No design system or Ask me in chat.');
+  if (typeof value === 'string' && (value === 'none' || value === 'ask' || value === PROJECT_CHOICE || SYSTEM_ID_PATTERN.test(value))) return value;
+  throw new ApiError('bad-request', 'That is not a design system choice. Pick Use the project, a design system, No design system or Ask me in chat.');
 };
 
 const FILING_UNREADABLE = "Design Chamber couldn't read the folders to file this design in. Nothing was made.";
@@ -480,8 +483,9 @@ export function registerChatRoutes(router: Router, ctx: ServiceContext): void {
 
   /**
    * Phase 2.5 §2.9, §5.4: a new design's system. A system is linked at creation (no version: the
-   * design holds nothing yet); `none` and `ask` are recorded as the decision; `none-silent` (no
-   * Ready system in this folder) leaves the design exactly as before Phase 2.5.
+   * design holds nothing yet); `none`, `ask` and `project` (use-the-project spec §1.5) are recorded
+   * as the decision; `none-silent` (no Ready system in this folder, nothing in the project) leaves
+   * the design exactly as before Phase 2.5.
    */
   const applySystemChoice = async (slug: string, choice: EffectiveSystemChoice): Promise<void> => {
     if (choice.choice === 'none-silent') return;
@@ -490,11 +494,12 @@ export function registerChatRoutes(router: Router, ctx: ServiceContext): void {
         await ensureLinkService(ctx).link(slug, { to: choice.id, by: 'creation', reason: 'system-change' });
         return;
       } catch (error) {
-        // The design is made either way; with the copy refused (the system changed a moment ago), the agent asks instead.
+        // The design is made either way; with the copy refused (the system changed a moment ago), the agent asks
+        // instead, or follows the project when it was the project's own system (the project still has its files).
         ctx.log.warn('systems.creation-link-failed', { slug, error: error instanceof Error ? error.message : String(error) });
       }
     }
-    const decision = choice.choice === 'none' ? 'none' : 'ask';
+    const decision = choice.choice === 'none' ? 'none' : choice.choice === 'project' || (choice.choice === 'system' && choice.why === 'project') ? 'project' : 'ask';
     await ctx.store.updateSystemState(slug, (state) => ({ ...state, systemDecision: decision })).catch((error: unknown) => {
       ctx.log.warn('systems.creation-decision-failed', { slug, error: error instanceof Error ? error.message : String(error) });
     });
@@ -519,22 +524,24 @@ export function registerChatRoutes(router: Router, ctx: ServiceContext): void {
       throw new ApiError('bad-request', 'That style preset is not available. Pick another or start without one.');
     }
     // Phase 2.5 §2.9: which system the new design gets. An explicit pick that is gone or a draft by now
-    // is refused before anything is made (the dialog offered it as Ready).
-    const systems = await ensureLinkService(ctx).indexed(true);
-    if (input.system !== null && input.system !== 'none' && input.system !== 'ask') {
+    // is refused before anything is made (the dialog offered it as Ready). Unreadable systems are left out.
+    const systems = choiceSystemsOf(await ensureSystemStore(ctx).list());
+    if (input.system !== null && input.system !== 'none' && input.system !== 'ask' && input.system !== PROJECT_CHOICE) {
       const picked = systems.find((one) => one.id === input.system);
       if (picked === undefined) throw new ApiError('invalid', LINK_SYSTEM_GONE_MESSAGE);
       if (picked.status !== 'ready') throw new ApiError('invalid', linkDraftMessage(picked.name));
     }
+    // Use-the-project spec §1.5: the project scan runs before the rules (cached and shared with `prepare`).
+    const project = await instructions.discover(input.projectDirectory);
     const choice = effectiveSystemChoice({
       explicit: input.system,
       projectDirectory: input.projectDirectory,
+      project: { state: project.state, found: project.sources.length > 0 },
       designsRoot: ctx.settings.root(),
       settings: ctx.settings.read(),
       systems,
       foldsCase: foldsCase(),
     });
-    await instructions.discover(input.projectDirectory);
     const created = await ctx.store.create({
       kind: input.kind,
       title: titleFromBrief(input.brief, input.kind),

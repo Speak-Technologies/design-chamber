@@ -37,22 +37,32 @@ describe('systemPins', () => {
         { directory: 'relative/path', choice: 'none' },
         { directory: '/abs/bad\nname', choice: 'none' },
         { directory: '/abs/blog', choice: 'system', id: 'Not Valid', name: 'X' },
-        { directory: '/abs/docs', choice: 'default' },
+        { directory: '/abs/docs', choice: 'follow-default' },
         'junk',
       ],
       'linux',
     );
     assert.deepEqual(pins, [
       { directory: '/abs/shop', choice: 'system', id: 'acme', name: 'Acme' },
-      { directory: '/abs/docs', choice: 'default' },
+      { directory: '/abs/docs', choice: 'follow-default' },
     ]);
+  });
+
+  test('a legacy default pin is dropped, so the project reads as Use the project; the next write leaves it out', () => {
+    const raw = [
+      { directory: '/abs/shop', choice: 'default' },
+      { directory: '/abs/blog', choice: 'follow-default', id: 'ignored', name: 'Ignored' },
+      { directory: '/abs/docs', choice: 'project' },
+    ];
+    assert.deepEqual(normalizeSystemPins(raw, 'linux'), [{ directory: '/abs/blog', choice: 'follow-default' }]);
+    assert.deepEqual(normalizeSettings({ systemPins: [{ directory: '/abs/shop', choice: 'default' }] }), { version: 1 });
   });
 
   test('on win32 directories compare ignoring case and slash direction', () => {
     const pins = normalizeSystemPins(
       [
         { directory: 'C:\\Work\\Shop', choice: 'none' },
-        { directory: 'c:/work/shop', choice: 'default' },
+        { directory: 'c:/work/shop', choice: 'follow-default' },
       ],
       'win32',
     );

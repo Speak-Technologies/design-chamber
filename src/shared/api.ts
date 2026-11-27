@@ -651,12 +651,16 @@ export type SystemResyncResponse = SystemEditResponse & {
 
 // ---- Phase 2.5: a design's system (§3.2, §2.7) ----
 
-/** What the design shows about its system (§2.7 `designSystemStatus`). */
+/**
+ * What the design shows about its system (§2.7 `designSystemStatus`). `project`: no system linked, the design
+ * follows its project's own design files (use-the-project spec §1.7).
+ */
 export type DesignSystemViewStatus =
   | { state: 'linked'; id: string; name: string; linkState: 'ok' | 'draft' | 'deleted' }
   | { state: 'invalid' }
   | { state: 'none' }
   | { state: 'ask' }
+  | { state: 'project' }
   | { state: 'unset' };
 
 /** COPY.json as the route answers it: the record without its file map. */

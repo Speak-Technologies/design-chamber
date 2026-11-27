@@ -53,6 +53,8 @@ export const chipOf = (view: DesignSystemView | null): ChipView | null => {
       return { label: 'Design system', title: 'This design’s system record can’t be read.', tone: 'warning' };
     case 'ask':
       return { label: 'Ask me in chat', title: 'The agent will ask which design system to use.', tone: 'neutral' };
+    case 'project':
+      return { label: 'Follows the project', title: 'This design follows its project’s own design files.', tone: 'neutral' };
     case 'none':
     case 'unset':
       return { label: 'No design system', title: 'This design has no design system.', tone: 'neutral' };
