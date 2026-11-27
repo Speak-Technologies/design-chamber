@@ -58,6 +58,7 @@ import {
   type BoardMotionProbe,
   type BoardStateProbe,
   type MotionResult,
+  type StateHint,
   type StateResult,
 } from './board-analyze.ts';
 import { staticLowPairs } from '../../shared/pair-contrast.ts';
@@ -292,12 +293,31 @@ export const pictureStates = async (
       await page.forceState(element, []);
     }
     if (after === null) continue;
-    results.push({ entry: target.entry, state: target.state, png, styled: stateStyled(before, after) });
+    const styled = stateStyled(before, after);
+    // An unstyled state's likely cause: focus whose CSS styles :focus-visible instead (forced once more to tell),
+    // else a state forced on the labelled copy itself, there being no resting copy beside it.
+    let hint: StateHint | undefined;
+    if (!styled && target.state === 'focus' && (await page.forceState(element, ['focus-visible']))) {
+      try {
+        const visible = await page.computedStyle(element);
+        if (visible !== null && stateStyled(before, visible)) hint = 'focus-visible';
+      } finally {
+        await page.forceState(element, []);
+      }
+    }
+    if (!styled && hint === undefined && !target.twin) hint = 'rest';
+    results.push({ entry: target.entry, state: target.state, png, styled, ...(hint !== undefined ? { hint } : {}) });
     if (png !== null) pngs.push(png);
   }
   const findings = stateFindings(results, 'wide');
   if (cut) findings.push({ code: 'system-board-partial', file: BOARD_FILE, screen: null, viewport: 'wide', params: { pictured: 'states', count: results.length, max: SYSTEM_STATE_SHOTS_MAX } });
   return { results, pngs, findings };
+};
+
+/** The entry kinds the motion probe reads for `--area` (examples first, then the `token` demo chips; null: all). */
+export const motionKindsOf = (area: SystemArea | null): string[] => {
+  const all: Record<SystemArea, string> = { components: 'component', patterns: 'pattern', brand: 'brand', foundations: 'token' };
+  return area === null ? ['component', 'pattern', 'brand', 'token'] : [all[area]];
 };
 
 /** Room around a motion element, so a chip that slides or an element that lifts stays in the frame. */
@@ -709,7 +729,8 @@ export const runSystemCheck = async (
     // T17: motion strips, last on the wide light board, so a pass short of time drops them first.
     if (width.id === 'wide') {
       motionPassRan = true;
-      const targets = sanitizeMotionProbe(await page.evaluate(`${renderInput.probeSource};__dcProbe.collectMotion(${SYSTEM_MOTION_SHOTS_MAX})`, { awaitPromise: false }), SYSTEM_MOTION_SHOTS_MAX);
+      // Example elements claim the cap first, then the demo chips; only the kinds --area keeps are collected.
+      const targets = sanitizeMotionProbe(await page.evaluate(`${renderInput.probeSource};__dcProbe.collectMotion(${SYSTEM_MOTION_SHOTS_MAX}, ${JSON.stringify(motionKindsOf(onlyArea))})`, { awaitPromise: false }), SYSTEM_MOTION_SHOTS_MAX);
       const pass = await pictureMotion(page, targets, { viewportWidth: width.width, deadline: started + boardMs * STATE_PASS_TIME_SHARE, area: onlyArea });
       motionResults.push(...pass.results);
       findings.push(...pass.findings);

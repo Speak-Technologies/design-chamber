@@ -141,13 +141,13 @@ export const collectStates = (max: number): BoardStateProbe => {
 };
 
 /**
- * The motion to picture (system-builder-depth T17): the Motion section's demo chips (`.dc-motion-demo`,
- * played by hover) and, in each example's first (light ground) host, the elements labelled
- * `data-dc-motion` (triggered by their `data-dc-state` when it is one the check forces, else hover). Each
- * with its entry, where it is (a demo's index, or a host and an element index) and its box. At most `max`,
- * then `truncated`. Reads only.
+ * The motion to picture (system-builder-depth T17): in each example's first (light ground) host, the
+ * elements labelled `data-dc-motion` (triggered by their `data-dc-state` when it is one the check forces,
+ * else hover), then the Motion section's demo chips (`.dc-motion-demo`, played by hover). Examples come
+ * first, so the chips take what is left of `max`; only entries of `kinds` are read (`token` for the
+ * chips), so another area can't fill it. Each with its entry, where it is and its box. Reads only.
  */
-export const collectMotion = (max: number): BoardMotionProbe => {
+export const collectMotion = (max: number, kinds: readonly string[]): BoardMotionProbe => {
   const items: BoardMotionProbe['items'] = [];
   let truncated = false;
   const push = (item: BoardMotionProbe['items'][number]): void => {
@@ -159,11 +159,7 @@ export const collectMotion = (max: number): BoardMotionProbe => {
     return { x: rect.left + window.scrollX, y: rect.top + window.scrollY, w: rect.width, h: rect.height };
   };
   const entryOf = (element: Element): string => (element.closest('[data-dc-entry]')?.getAttribute('data-dc-entry') ?? '').slice(0, BOARD_ENTRY_MAX);
-  const demos = document.querySelectorAll('.dc-motion-demo');
-  for (let index = 0; index < demos.length; index += 1) {
-    const demo = demos[index];
-    if (demo) push({ entry: entryOf(demo), kind: 'demo', host: null, element: index, trigger: 'hover', box: boxOf(demo) });
-  }
+  const wanted = (entry: string): boolean => kinds.includes(entry.slice(0, entry.indexOf(':')));
   const hosts = document.querySelectorAll('[data-dc-example-host]');
   const seen = new Set<string>();
   for (let hostIndex = 0; hostIndex < hosts.length; hostIndex += 1) {
@@ -171,7 +167,7 @@ export const collectMotion = (max: number): BoardMotionProbe => {
     const root = host?.shadowRoot;
     if (!host || !root || host.closest('.dc-dark') !== null) continue;
     const entry = entryOf(host);
-    if (entry === '' || seen.has(entry)) continue;
+    if (entry === '' || seen.has(entry) || !wanted(entry)) continue;
     seen.add(entry);
     const all = root.querySelectorAll('*');
     for (let index = 0; index < all.length && index < SYSTEM_BOARD_PREVIEW_ELEMENTS_MAX; index += 1) {
@@ -180,6 +176,13 @@ export const collectMotion = (max: number): BoardMotionProbe => {
       const label = (one.getAttribute('data-dc-state') ?? '').trim().toLowerCase();
       push({ entry, kind: 'example', host: hostIndex, element: index, trigger: FORCEABLE.find((candidate) => candidate === label) ?? 'hover', box: boxOf(one) });
     }
+  }
+  const demos = document.querySelectorAll('.dc-motion-demo');
+  for (let index = 0; index < demos.length; index += 1) {
+    const demo = demos[index];
+    if (!demo) continue;
+    const entry = entryOf(demo);
+    if (wanted(entry)) push({ entry, kind: 'demo', host: null, element: index, trigger: 'hover', box: boxOf(demo) });
   }
   return { items, truncated };
 };

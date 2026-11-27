@@ -155,10 +155,10 @@ test('each state is forced, read, pictured tight and cleared before the next ele
 
   assert.deepEqual(pass.results, [
     { entry: 'component:button', state: 'hover', png: '.chamber/check/r-test/button-hover@wide.png', styled: true },
-    { entry: 'component:chip', state: 'hover', png: '.chamber/check/r-test/chip-hover@wide.png', styled: false },
+    { entry: 'component:chip', state: 'hover', png: '.chamber/check/r-test/chip-hover@wide.png', styled: false, hint: 'rest' },
   ]);
   assert.deepEqual(pass.pngs, ['.chamber/check/r-test/button-hover@wide.png', '.chamber/check/r-test/chip-hover@wide.png']);
-  assert.deepEqual(pass.findings.map((finding) => [finding.code, finding.detail]), [['system-state-unstyled', 'chip: hover']]);
+  assert.deepEqual(pass.findings.map((finding) => [finding.code, finding.detail]), [['system-state-unstyled', 'chip: hover (no resting copy beside it to force the state on)']]);
   // The element path: the host among the example hosts, then the element in its shadow root.
   assert.equal(calls[0]?.path, '[data-dc-example-host]#0 > *#1');
   // The order for each element: style off, force, style on, picture, clear; then the next element.
@@ -425,4 +425,63 @@ test('the text names the state pictures, marks the ones that change nothing, and
   assert.match(text, /forced on the element, it changes nothing you can see\. Style it, or remove the label\. "chip: hover" Picture: chip-hover@wide\.png\./);
   assert.match(text, /State pictures \(each labelled hover, focus or active state forced on its element, wide board\):\n {2}button-hover@wide\.png\n {2}chip-hover@wide\.png {2}\(changes nothing\)/);
   assert.ok(!text.includes('—'));
+});
+
+// ---- hints: the likely cause of an unstyled state ----
+
+test('an unstyled state says why when the check can tell: no resting copy, or focus styled as :focus-visible only', async () => {
+  const forcedNow = new Map<number, readonly string[]>();
+  const calls: string[] = [];
+  // Element 1: labelled focus, only :focus-visible styled. Element 2: labelled hover, nothing styled, no twin. Element 3: the same with a twin.
+  const page = {
+    computedStyle: async (path: ElementPath) => {
+      const element = path[1]?.index ?? -1;
+      const states = forcedNow.get(element) ?? [];
+      calls.push(`style ${element} [${states.join(',')}]`);
+      return element === 1 && states.includes('focus-visible') ? { ...REST, 'outline-style': 'solid' } : { ...REST };
+    },
+    forceState: async (path: ElementPath, states: readonly string[]) => {
+      forcedNow.set(path[1]?.index ?? -1, states);
+      calls.push(`force ${path[1]?.index ?? -1} [${states.join(',')}]`);
+      return true;
+    },
+    scrollTo: async () => undefined,
+    capture: async (clip: { width?: number; height: number }) => pngOfSize(clip.width ?? 10, clip.height),
+    save: async (label: string) => `${label}@wide.png`,
+  };
+  const pass = await pictureStates(
+    page,
+    { states: [target({ state: 'focus', element: 1, twin: true }), target({ entry: 'component:chip', element: 2, twin: false }), target({ entry: 'component:tab', element: 3, twin: true })], truncated: false },
+    { viewportWidth: 1526, deadline: Number.POSITIVE_INFINITY },
+  );
+  assert.deepEqual(pass.results.map((result) => [result.entry, result.state, result.styled, result.hint]), [
+    ['component:button', 'focus', false, 'focus-visible'],
+    ['component:chip', 'hover', false, 'rest'],
+    ['component:tab', 'hover', false, undefined],
+  ]);
+  // The extra :focus-visible try happens after the picture and is cleared too; nothing is left forced.
+  assert.deepEqual(calls.slice(0, 7), ['style 1 []', 'force 1 [focus]', 'style 1 [focus]', 'force 1 []', 'force 1 [focus-visible]', 'style 1 [focus-visible]', 'force 1 []']);
+  assert.ok([...forcedNow.values()].every((states) => states.length === 0));
+
+  assert.deepEqual(pass.findings.map((finding) => [finding.detail, finding.params]), [
+    ['button: focus (labelled focus but its CSS styles :focus-visible)', { count: 1, hint: 'focus-visible' }],
+    ['chip: hover (no resting copy beside it to force the state on)', { count: 1, hint: 'rest' }],
+    ['tab: hover', { count: 1 }],
+  ]);
+  const [focus, rest, plain] = pass.findings.map((finding) => findingMessage(finding));
+  assert.match(focus ?? '', /It is labelled focus but its CSS styles :focus-visible: label it focus-visible, or style :focus too\.$/);
+  assert.match(rest ?? '', /There is no resting copy beside the labelled one to force the state on: add one labelled data-dc-state="rest" with the same variant and size\.$/);
+  assert.ok(!/resting copy|:focus-visible:/.test(plain ?? ''), plain);
+
+  // Both causes in one component: both sentences, each state with its own words.
+  const both = stateFindings(
+    [
+      { entry: 'component:button', state: 'focus', png: null, styled: false, hint: 'focus-visible' },
+      { entry: 'component:button', state: 'hover', png: null, styled: false, hint: 'rest' },
+    ],
+    'wide',
+  )[0];
+  assert.equal(both?.params?.hint, 'both');
+  assert.match(findingMessage(both ?? assert.fail()), /no resting copy.*labelled focus/);
+  assert.equal(parseFindingData({ ...both, params: { count: 2, hint: 'forged' } })?.params?.hint, undefined, 'a forged hint never reaches a sentence');
 });

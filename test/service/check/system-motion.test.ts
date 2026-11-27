@@ -12,7 +12,7 @@ import type { CdpEvent, CdpSession } from '../../../src/service/check/cdp.ts';
 import { decodePng, encodePng, SIDE_BY_SIDE_GAP } from '../../../src/service/check/png-stitch.ts';
 import { animationEndOf, renderArtboards, renderMediaFeatures, type CaptureClip, type ElementPath, type InspectPage, type MotionFrames, type PlannedArtboard } from '../../../src/service/check/render.ts';
 import { formatSystemCheckText } from '../../../src/service/check/report-text.ts';
-import { cliSystemStore, pictureMotion, runSystemCheck } from '../../../src/service/check/system-run.ts';
+import { cliSystemStore, motionKindsOf, pictureMotion, runSystemCheck } from '../../../src/service/check/system-run.ts';
 import { systemCheckReport } from '../../../src/service/check/system-static.ts';
 import { findingMessage, parseFindingData } from '../../../src/shared/checks.ts';
 import { SYSTEM_MOTION_FRAMES, SYSTEM_MOTION_SHOTS_MAX } from '../../../src/shared/limits.ts';
@@ -157,7 +157,7 @@ test('the motion pass runs on the wide light board only, and its strips are kept
             evaluate: async (expression) => {
               if (expression.includes('collectMotion')) {
                 asked.push(art.viewport.id);
-                assert.match(expression, new RegExp(`collectMotion\\(${SYSTEM_MOTION_SHOTS_MAX}\\)$`));
+                assert.ok(expression.endsWith(`collectMotion(${SYSTEM_MOTION_SHOTS_MAX}, ["component","pattern","brand","token"])`), expression.slice(-80));
                 return { items: [demo()], truncated: false };
               }
               return { innerWidth: art.viewport.width, scrollWidth: art.viewport.width, scrollHeight: 900, areas: [{ area: 'foundations', top: 0, height: 900 }], items: [], truncated: false, pairs: [] };
@@ -325,4 +325,12 @@ test('the text lists the motion strips, says when nothing moved, and marks one t
     /Motion strips \(wide board\): frames from start to end, left to right, and last the end with reduced motion\.\n {2}--duration-fast-motion@wide\.png {2}--duration-fast: 4 frames on hover\n {2}slide-motion@wide\.png {2}slide: 4 frames on hover; it still moves with reduced motion\n {2}still-motion@wide\.png {2}still: nothing moved on focus, so one frame/,
   );
   assert.ok(!text.includes('—'));
+});
+
+test('examples are collected before the demo chips, and --area asks only for its own kind', () => {
+  assert.deepEqual(motionKindsOf(null), ['component', 'pattern', 'brand', 'token']);
+  assert.deepEqual(motionKindsOf('foundations'), ['token']);
+  assert.deepEqual(motionKindsOf('components'), ['component']);
+  assert.deepEqual(motionKindsOf('patterns'), ['pattern']);
+  assert.deepEqual(motionKindsOf('brand'), ['brand']);
 });

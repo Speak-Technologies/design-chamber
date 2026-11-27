@@ -28,6 +28,7 @@ const fixture: Record<string, string> = {
       { id: 'ring-none', name: 'Ring none', layout: 'compact', example: 'components/ring-none.html' },
       { id: 'copy', name: 'Copy', layout: 'compact', example: 'components/copy.html' },
       { id: 'slow', name: 'Slow', layout: 'compact', example: 'components/slow.html' },
+      { id: 'focus-only', name: 'Focus only', layout: 'compact', example: 'components/focus-only.html' },
     ],
   }),
   '.chamber/state.json': JSON.stringify({ name: 'Acme', status: 'ready' }),
@@ -38,6 +39,8 @@ const fixture: Record<string, string> = {
   // The labels as the reference writes them: a static copy of hover with a class, beside the rest instance.
   'components/copy.html': `<style>${BUTTON} button:hover, button.is-hover{background:#333;color:#fff}</style><button data-dc-state="rest">Save</button> <button class="is-hover" data-dc-state="hover">Save</button>`,
   // Two seconds, and nothing moves until the end: read at normal speed it would look unstyled.
+  // Labelled focus beside its rest copy, but only :focus-visible is styled: the finding says so.
+  'components/focus-only.html': `<style>${BUTTON} button:focus-visible{outline:2px solid rgb(0,0,200)}</style><button data-dc-state="rest">Save</button> <button data-dc-state="focus">Save</button>`,
   'components/slow.html': `<style>${BUTTON} button{transition:background-color 2s steps(1, end)} button:hover{background:#333}</style><button data-dc-state="hover">Save</button>`,
 };
 
@@ -69,14 +72,16 @@ test('labelled states are forced over CDP, pictured tight, and the unstyled ones
     assert.equal(verdict('ring-none', 'focus-visible')?.styled, false, 'outline: none and nothing else is not');
     assert.equal(verdict('copy', 'hover')?.styled, true, 'forced on the rest twin, the real :hover shows');
     assert.equal(verdict('slow', 'hover')?.styled, true, 'read where the transition ends');
-    assert.equal(states.length, 7, JSON.stringify(states));
+    assert.deepEqual([verdict('focus-only', 'focus')?.styled, verdict('focus-only', 'focus')?.hint], [false, 'focus-visible'], JSON.stringify(states));
+    assert.equal(states.length, 8, JSON.stringify(states));
 
     const unstyled = render.findings.filter((finding) => finding.code === 'system-state-unstyled');
     assert.deepEqual(
       unstyled.map((finding) => [finding.file, finding.viewport, finding.detail, finding.params?.count]).sort(),
       [
-        ['components/plain.html', 'wide', 'plain: hover, active', 2],
-        ['components/ring-none.html', 'wide', 'ring-none: focus-visible', 1],
+        ['components/focus-only.html', 'wide', 'focus-only: focus (labelled focus but its CSS styles :focus-visible)', 1],
+        ['components/plain.html', 'wide', 'plain: hover (no resting copy beside it to force the state on), active (no resting copy beside it to force the state on)', 2],
+        ['components/ring-none.html', 'wide', 'ring-none: focus-visible (no resting copy beside it to force the state on)', 1],
       ],
     );
     assert.ok(!render.findings.some((finding) => finding.code === 'system-board-partial'), JSON.stringify(render.findings));

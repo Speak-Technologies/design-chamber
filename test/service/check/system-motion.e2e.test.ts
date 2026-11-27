@@ -11,7 +11,7 @@ import { test } from 'node:test';
 
 import { decodePng, PNG_STITCH_SIDE_MAX, SIDE_BY_SIDE_GAP, type DecodedPng } from '../../../src/service/check/png-stitch.ts';
 import { cliSystemStore, runSystemCheck } from '../../../src/service/check/system-run.ts';
-import { SYSTEM_MOTION_FRAMES } from '../../../src/shared/limits.ts';
+import { SYSTEM_MOTION_FRAMES, SYSTEM_MOTION_SHOTS_MAX } from '../../../src/shared/limits.ts';
 import { chromeOrSkip } from '../../helpers/chrome-or-skip.ts';
 import { probeSource } from '../../helpers/probe-source.ts';
 import { useTmpRoot } from '../../helpers/tmp-root.ts';
@@ -108,6 +108,33 @@ test('motion is pictured frame by frame from Node over CDP, and once more with r
     assert.ok(!render.findings.some((finding) => finding.code === 'system-board-partial'), JSON.stringify(render.findings));
     // The board's time holds with the motion strips in it.
     assert.ok(elapsed < 70_000, `${elapsed} ms`);
+  } finally {
+    await store.dispose();
+  }
+});
+
+test('example strips claim the 24-strip cap before the Motion section demo chips', { timeout: 180_000 }, async (t) => {
+  const browserPath = chromeOrSkip(t);
+  if (browserPath === null) return;
+  const tmp = await useTmpRoot(t);
+  // Thirty time tokens draw thirty demo chips, above the components on the board.
+  const tokens = `:root {\n  --brand: #1a73e8;\n${Array.from({ length: 30 }, (_, i) => `  --duration-${i + 1}: ${100 + i * 10}ms;`).join('\n')}\n}\n`;
+  for (const [rel, body] of Object.entries({ ...files, 'tokens.css': tokens })) await tmp.write(`_systems/acme/${rel}`, body);
+  const store = cliSystemStore(tmp.root, { version: 1 });
+  try {
+    const result = await runSystemCheck(store, 'acme', {
+      now: new Date(),
+      tool: 'cli',
+      render: { browserPath, probeSource: await probeSource(), platform: process.platform, isRoot: process.getuid?.() === 0, scheme: 'light' },
+    });
+    const render = result.report.render;
+    assert.ok(render !== null);
+    const motion = render.motion ?? [];
+    assert.equal(motion.length, SYSTEM_MOTION_SHOTS_MAX, JSON.stringify(motion.map((one) => one.entry)));
+    assert.deepEqual(motion.slice(0, 2).map((one) => one.entry), ['component:slide', 'component:still'], 'the examples first');
+    assert.ok(motion.slice(2).every((one) => one.entry.startsWith('token:--duration-')), 'then the chips with what is left');
+    const partial = render.findings.filter((finding) => finding.code === 'system-board-partial' && finding.params?.pictured === 'motion');
+    assert.deepEqual(partial.map((finding) => finding.params?.count), [SYSTEM_MOTION_SHOTS_MAX]);
   } finally {
     await store.dispose();
   }

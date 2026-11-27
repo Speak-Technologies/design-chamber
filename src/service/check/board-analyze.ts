@@ -355,31 +355,47 @@ export const stateStyled = (before: Readonly<Record<string, string>>, after: Rea
   return false;
 };
 
-/** One forced state as the check saw it: the picture (null when it couldn't be taken) and the verdict. */
-export type StateResult = { entry: string; state: ForcedState; png: string | null; styled: boolean };
+/** Why a forced state likely changed nothing, when the check can tell (`CheckParams.hint`). */
+export type StateHint = 'rest' | 'focus-visible';
+
+/**
+ * One forced state as the check saw it: the picture (null when it couldn't be taken), the verdict, and for
+ * an unstyled one the likely cause: `rest` when it was forced on the labelled copy itself (no resting copy
+ * with the same variant and size), `focus-visible` when labelled focus but :focus-visible changes it.
+ */
+export type StateResult = { entry: string; state: ForcedState; png: string | null; styled: boolean; hint?: StateHint };
+
+/** The words a hint adds after its state in the finding's detail. */
+const HINT_DETAIL: Readonly<Record<StateHint, string>> = { rest: 'no resting copy beside it to force the state on', 'focus-visible': 'labelled focus but its CSS styles :focus-visible' };
 
 /**
  * The `system-state-unstyled` findings: one per component whose labelled states change nothing when
  * forced, naming the component and those states in `detail` (`button: hover, focus-visible`).
  */
 export const stateFindings = (results: readonly StateResult[], viewport: BoardPassId): CheckFindingData[] => {
-  const unstyled = new Map<string, Set<ForcedState>>();
+  // Per component, each unstyled state once, with the first hint any of its instances gave.
+  const unstyled = new Map<string, Map<ForcedState, StateHint | undefined>>();
   for (const result of results) {
     if (result.styled) continue;
     const id = parseEntryKey(result.entry)?.key;
     if (id === undefined) continue;
-    let set = unstyled.get(id);
-    if (set === undefined) unstyled.set(id, (set = new Set()));
-    set.add(result.state);
+    let states = unstyled.get(id);
+    if (states === undefined) unstyled.set(id, (states = new Map()));
+    if (!states.has(result.state) || states.get(result.state) === undefined) states.set(result.state, result.hint);
   }
-  return [...unstyled].map(([id, states]) => ({
-    code: 'system-state-unstyled',
-    file: `components/${id}.html`,
-    screen: null,
-    viewport,
-    params: { count: states.size },
-    detail: cleanDetail(`${id}: ${[...states].join(', ')}`, CHECK_DETAIL_MAX),
-  }));
+  return [...unstyled].map(([id, states]) => {
+    const hints = new Set([...states.values()].filter((hint): hint is StateHint => hint !== undefined));
+    const hint = hints.size === 2 ? 'both' : [...hints][0];
+    const named = [...states].map(([state, why]) => (why === undefined ? state : `${state} (${HINT_DETAIL[why]})`));
+    return {
+      code: 'system-state-unstyled',
+      file: `components/${id}.html`,
+      screen: null,
+      viewport,
+      params: { count: states.size, ...(hint !== undefined ? { hint } : {}) },
+      detail: cleanDetail(`${id}: ${named.join(', ')}`, CHECK_DETAIL_MAX),
+    };
+  });
 };
 
 // ---- motion frames (system-builder-depth T17) ----

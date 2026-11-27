@@ -447,9 +447,14 @@ const RULES: Readonly<Record<CheckCode, CodeRule>> = {
     severity: 'warning',
     sentence: (f) => {
       const count = Math.max(1, Math.round(f.params?.count ?? 1));
-      return count === 1
-        ? "The example labels a state its CSS doesn't style: forced on the element, it changes nothing you can see. Style it, or remove the label."
-        : `The example labels ${num(count)} states its CSS doesn't style: forced on the element, they change nothing you can see. Style them, or remove the labels.`;
+      const base =
+        count === 1
+          ? "The example labels a state its CSS doesn't style: forced on the element, it changes nothing you can see. Style it, or remove the label."
+          : `The example labels ${num(count)} states its CSS doesn't style: forced on the element, they change nothing you can see. Style them, or remove the labels.`;
+      const hint = f.params?.hint;
+      const rest = hint === 'rest' || hint === 'both' ? ' There is no resting copy beside the labelled one to force the state on: add one labelled data-dc-state="rest" with the same variant and size.' : '';
+      const focus = hint === 'focus-visible' || hint === 'both' ? ' It is labelled focus but its CSS styles :focus-visible: label it focus-visible, or style :focus too.' : '';
+      return `${base}${rest}${focus}`;
     },
   },
   // T18: `px` = the source's width when no viewport matches; `reason` limit or budget with `count` (and `max`); neither = unreadable.
@@ -695,6 +700,7 @@ const parseParams = (value: unknown): CheckParams | undefined => {
   if (value.scheme === 'light' || value.scheme === 'dark') out.scheme = value.scheme;
   const listed = oneOf(value.listed, LISTED);
   if (listed !== null) out.listed = listed;
+  if (value.hint === 'rest' || value.hint === 'focus-visible' || value.hint === 'both') out.hint = value.hint;
   if (value.pairs === 'auto') out.pairs = 'auto';
   return Object.keys(out).length > 0 ? out : undefined;
 };

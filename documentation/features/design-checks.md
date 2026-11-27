@@ -326,6 +326,12 @@ that one instead, so a hover copy drawn with a class such as `is-hover` doesn't 
   ("button: hover, focus-visible") and ending with the pictures. An outline or a border that paints
   nothing (no style or no width) doesn't count, so `:focus-visible { outline: none }` with nothing else
   is unstyled, while one that only changes the colour is styled.
+- **Why, when it can tell.** The finding names the likely cause after the state in the detail and adds a
+  sentence. A state forced on the labelled copy itself, because no resting copy with the same variant and
+  size sits beside it, says "no resting copy beside it to force the state on" (a class such as
+  `is-hover` on that copy hides the real `:hover`). A `focus` label that changes nothing, where forcing
+  `:focus-visible` on the same element does change it, says "labelled focus but its CSS styles
+  :focus-visible". `params.hint` is `rest`, `focus-visible` or `both`.
 - **Limits.** At most 60 states a run, and they stop at 85% of the pass's 45 seconds; past either, one
   note says how many were forced and pictured. Each state is cleared before the next element. The
   narrow width and the dark pass don't repeat it, `--area` other than components and `--screen` skip it.
@@ -349,7 +355,8 @@ done from the service over CDP; no script is added to the page.
   Every media setting is sent with it, and the page goes back to no-preference and full speed after.
 - **Limits.** At most 24 strips a run, inside the same 85% of the pass's 45 seconds as the state
   pictures; they come last, so a pass short of time drops them first. Past either, one note says how
-  many were taken. `--area` keeps that area's (the demo chips are Foundations); the narrow width, the
+  many were taken. Example elements claim the 24 first and the demo chips get what is left, so a long
+  Motion section never crowds the components out. `--area` keeps that area's (the demo chips are Foundations); the narrow width, the
   dark pass and `--screen` don't take them. `check.json` has `render.motion`:
   `{ entry, trigger, png, frames, moved, reducedMoves }` per strip.
 
