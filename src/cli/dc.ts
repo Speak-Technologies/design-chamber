@@ -2,6 +2,8 @@
 // (documentation/specs/agent-render-and-check.md §4.7). It runs in the agent's shell, needs no
 // service and no token: it reads the design's files, starts its own headless browser, prints what
 // it found and exits 0 (no errors), 1 (errors) or 2 (it could not run).
+// `dc list` and `dc read <design>` (use-the-project spec §2.3) only read: the library, one design's
+// pins, hand edits, system and last check, and what the user has open. Exit 0 or 2.
 //
 // Built to dist/cli/dc.mjs (scripts/build.mjs) with the probe embedded as `__DC_PROBE__`; the
 // launcher the service writes (`<root>/.chamber/bin/dc`) calls it with `--root`.
@@ -19,6 +21,8 @@ import { resolveSystemTarget, resolveTarget } from '../service/check/target.ts';
 import { resolveBrowser } from '../service/chrome.ts';
 import { defaultDesignsRoot, isDesignFolder, isDirectory } from '../service/root.ts';
 import { readSettingsFile, settingsFilePath } from '../service/settings.ts';
+import { listDesigns, readOneDesign } from '../service/agent-read.ts';
+import { formatListText, formatReadText, listJson, parseReadArgs, readJson, type ReadCommand } from '../shared/agent/read-text.ts';
 import type { SettingsFile, SystemArea } from '../shared/types.ts';
 import type { CheckScheme } from '../service/check/report-text.ts';
 
@@ -103,8 +107,38 @@ const checkSystem = async (input: {
   }
 };
 
+/**
+ * `dc list` and `dc read` (use-the-project spec §2.3): read the designs folder and answer.
+ * Nothing is written; exit 0 when answered, 2 when it could not run.
+ */
+const readCommand = async (command: Exclude<ReadCommand, { kind: 'error' }>): Promise<number> => {
+  const settingsFile = settingsFilePath();
+  const { root, settings } = await rootFrom(command.root);
+  if (!path.isAbsolute(root)) return fail(`The designs folder must be a full path, not ${root}.`);
+  if (!(await isDirectory(root))) return fail(`The designs folder ${root} does not exist.`);
+  // view.json sits beside settings.json (§2.4), so a DC_SETTINGS_PATH test seam moves both.
+  const dataDir = path.dirname(settingsFile);
+  const now = new Date();
+  try {
+    if (command.kind === 'list') {
+      const answer = await listDesigns({ root, settings, dataDir, now, project: command.project, kind: command.designKind, text: command.text });
+      out(command.json ? listJson(answer) : formatListText(answer));
+      return 0;
+    }
+    const result = await readOneDesign({ root, settings, dataDir, now, slug: command.slug });
+    if (!result.ok) return fail(result.message);
+    out(command.json ? readJson(result.answer) : formatReadText(result.answer));
+    return 0;
+  } catch (error) {
+    return fail(`Design Chamber couldn't read the designs folder: ${error instanceof Error ? error.message : String(error)}`);
+  }
+};
+
 const main = async (): Promise<number> => {
-  const command = parseArgs(process.argv.slice(2));
+  const argv = process.argv.slice(2);
+  const read = parseReadArgs(argv, path.isAbsolute);
+  if (read !== null) return read.kind === 'error' ? fail(read.message) : readCommand(read);
+  const command = parseArgs(argv);
   switch (command.kind) {
     case 'help':
       out(`${USAGE}\n`);

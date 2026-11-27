@@ -47,7 +47,7 @@ export type RevisionPrompt = {
 /** Anchor `text` is cut to this many characters at ladder level 2. */
 const SHORT_TEXT_MAX = 40;
 
-type Detail = 'full' | 'no-html' | 'short';
+export type Detail = 'full' | 'no-html' | 'short';
 
 /** A design viewport's label, `full-width view` for the page-fill viewport, else the id as written. */
 export const viewportLabel = (viewports: readonly Viewport[], id: string): string => {
@@ -76,7 +76,8 @@ const flag = (state: AnchorState | undefined): string => {
   return '';
 };
 
-const renderComment = (input: RevisionInput, comment: Comment, number: number, detail: Detail, bodyMax = Number.POSITIVE_INFINITY): string => {
+/** One numbered comment with the element it points at; `design_read` uses the same form (use-the-project spec §2.3). */
+export const renderComment = (input: RevisionInput, comment: Comment, number: number, detail: Detail, bodyMax = Number.POSITIVE_INFINITY): string => {
   const { anchor } = comment;
   const text = detail === 'short' ? clip(anchor.text, SHORT_TEXT_MAX) : anchor.text;
   const parts = [
