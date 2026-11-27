@@ -579,10 +579,10 @@ export type SystemCheckRender = {
   schemes?: ('light' | 'dark')[];
   /**
    * The system screens drawn (system-builder-depth T12b): one artboard per screen per viewport, in plan
-   * order, dark twins named `<viewport>-dark`; `viewports` names every size, for the sentences. Absent
+   * order, dark twins named `<viewport>-dark`; `viewports` names every size per screen, for the sentences. Absent
    * when the run drew no screens.
    */
-  screens?: { artboards: ArtboardCheck[]; viewports: Viewport[] };
+  screens?: { artboards: ArtboardCheck[]; viewports: (Viewport & { screen: string })[] };
 };
 
 /** One area at one width: its overview (the whole area scaled down) and its full-size tiles. */

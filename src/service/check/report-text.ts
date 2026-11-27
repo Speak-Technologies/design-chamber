@@ -5,7 +5,7 @@
 import { codeSpan } from '../../shared/agent/context.ts';
 import { AREA_LABELS, cleanDetail, countFindings, sortFindings, withMessage } from '../../shared/checks.ts';
 import { CHECK_TEXT_SHOWN, SCREEN_ID_PATTERN, SYSTEM_ENTRY_ID_PATTERN, SYSTEM_ID_PATTERN } from '../../shared/limits.ts';
-import type { CheckFinding, CheckReport, DesignJson, SystemArea } from '../../shared/types.ts';
+import type { CheckFinding, CheckFindingData, CheckReport, DesignJson, SystemArea } from '../../shared/types.ts';
 import { BOARD_PASSES } from './board-analyze.ts';
 import type { SystemBoardShot, SystemCheckReport } from './system-static.ts';
 
@@ -236,10 +236,16 @@ export type SystemTextInput = {
 /** The board passes as viewports, so a board finding's sentence names "Wide board 1526×900" or "Wide board, dark 1526×900". */
 const BOARD_WIDTH_VIEWPORTS = BOARD_PASSES.map((width) => ({ id: width.id, label: width.label, width: width.width, height: width.height }));
 
-/** The system's findings (static and measured) with severity and sentence, errors first; a screen finding names its viewport. */
+/**
+ * The system's findings (static and measured) with severity and sentence, errors first. A screen finding
+ * is named by its own screen's size only, so a viewport id two screens use at different sizes, or one
+ * called like a board pass (`wide`), is never named by another artboard's size.
+ */
 export const systemFindingsOf = (report: SystemCheckReport): CheckFinding[] => {
-  const viewports = [...BOARD_WIDTH_VIEWPORTS, ...(report.render?.screens?.viewports ?? [])];
-  return sortFindings([...report.static.findings, ...(report.render?.findings ?? [])].map((finding) => withMessage(finding, viewports)));
+  const screenViewports = report.render?.screens?.viewports ?? [];
+  const viewportsOf = (finding: CheckFindingData): readonly { id: string; label: string; width: number; height: number }[] =>
+    finding.file !== null && finding.file.startsWith('screens/') && finding.screen !== null ? screenViewports.filter((viewport) => viewport.screen === finding.screen) : BOARD_WIDTH_VIEWPORTS;
+  return sortFindings([...report.static.findings, ...(report.render?.findings ?? [])].map((finding) => withMessage(finding, viewportsOf(finding))));
 };
 
 /** A picture's file name (the run folder is printed once). */
@@ -308,7 +314,7 @@ const screenPictureLines = (render: NonNullable<SystemCheckReport['render']>, ru
   if (drawn.length === 0) return ['', 'No screen pictures were saved.'];
   const lines = ['', `Screen pictures${runDir === null || boardNamedRunDir ? '' : ` in ${runDir}`}, one per screen and viewport. Open each one and look before you say you are done.`];
   for (const artboard of drawn) {
-    const label = screens.viewports.find((viewport) => viewport.id === artboard.viewport)?.label ?? artboard.viewport;
+    const label = screens.viewports.find((viewport) => viewport.screen === artboard.screen && viewport.id === artboard.viewport)?.label ?? artboard.viewport;
     const more = artboard.pngs.length > 1 ? ` (${artboard.pngs.length} images, top to bottom)` : '';
     lines.push(`  ${fileName(artboard.pngs[0] ?? '')}  ${artboard.screen ?? ''} at ${label} ${artboard.width}x${artboard.height}, page ${artboard.docHeight}px tall${more}`);
   }

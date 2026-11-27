@@ -66,7 +66,7 @@ describe('the screen plan', () => {
   test('dark twins come after every light artboard, named <viewport>-dark and labelled dark; --screen keeps those screens', () => {
     const { plan, viewports } = planScreenArtboards(detail, { only: null, schemes: ['light', 'dark'] });
     assert.deepEqual(plan.map((art) => `${art.screen}@${art.viewport.id}${art.scheme === 'dark' ? '*' : ''}`), ['home@laptop', 'home@phone', 'og@og', 'home@laptop-dark*', 'home@phone-dark*', 'og@og-dark*']);
-    assert.deepEqual(viewports.find((viewport) => viewport.id === 'phone-dark'), { id: 'phone-dark', label: 'Phone, dark', width: 390, height: 844 });
+    assert.deepEqual(viewports.find((viewport) => viewport.id === 'phone-dark'), { id: 'phone-dark', label: 'Phone, dark', width: 390, height: 844, screen: 'home' });
     assert.deepEqual(planScreenArtboards(detail, { only: ['og'], schemes: ['dark'] }).plan.map((art) => art.viewport.id), ['og-dark']);
   });
 
@@ -269,6 +269,32 @@ describe('a run with screens', () => {
     assert.match(text, /Screen pictures in \S+, one per screen and viewport\./);
     assert.match(text, /  screen-home@phone\.png  home at Phone 390x844, page 900px tall/);
     assert.match(text, /  screen-og@og-dark\.png  og at Open Graph, dark 1200x630/);
+  });
+});
+
+describe('a viewport id used at two sizes', () => {
+  test("each screen finding and picture line names that screen's own size, and a screen viewport called wide is not the board's", async (t) => {
+    const clash = {
+      screens: [
+        { id: 'home', title: 'Home', kind: 'page', viewports: [{ id: 'og', label: 'Card', width: 1200, height: 630 }, { id: 'wide', label: 'Desk', width: 1440, height: 900 }] },
+        { id: 'og', title: 'Square card', kind: 'marketing', viewports: [{ id: 'og', label: 'Card', width: 1080, height: 1080 }] },
+      ],
+    };
+    const overflow = (deps: RenderDeps): CheckFindingData[] =>
+      deps.inspect !== undefined
+        ? []
+        : [
+            { code: 'overflow-x', file: 'screens/og.html', screen: 'og', viewport: 'og', params: { px: 1300, width: 1080 } },
+            { code: 'overflow-x', file: 'screens/home.html', screen: 'home', viewport: 'og', params: { px: 1300, width: 1200 } },
+            { code: 'overflow-x', file: 'screens/home.html', screen: 'home', viewport: 'wide', params: { px: 1500, width: 1440 } },
+            { code: 'overflow-x', file: 'screens/og.html', screen: 'og', viewport: 'og-dark', params: { px: 1300, width: 1080 } },
+          ];
+    const { report, pngs } = await run(t, clash, { scheme: 'light' }, { findings: overflow });
+    const messages = systemFindingsOf(report).filter((finding) => finding.code === 'overflow-x').map((finding) => finding.message.split(':')[0]);
+    assert.deepEqual(messages.sort(), ['screens/home.html @ Card 1200×630', 'screens/home.html @ Desk 1440×900', 'screens/og.html @ Card 1080×1080', 'screens/og.html @ og-dark'].sort());
+    const text = formatSystemCheckText({ report, name: 'Acme', reportPath: null, pngs, runDir: null });
+    assert.match(text, /screen-og@og\.png {2}og at Card 1080x1080/);
+    assert.match(text, /screen-home@og\.png {2}home at Card 1200x630/);
   });
 });
 

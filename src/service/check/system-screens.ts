@@ -20,13 +20,19 @@ export const darkViewportId = (id: string): string => `${id.slice(0, VIEWPORT_ID
 /** The sizes a screen shows at: its own, else the system's. */
 export const screenViewportsOf = (detail: Pick<SystemDetail, 'viewports'>, screen: SystemDetail['screens'][number]): Viewport[] => screen.viewports ?? detail.viewports;
 
+/** A viewport as one screen draws it. */
+export type ScreenViewport = Viewport & { screen: string };
+
 export type ScreenPlan = {
   /** The artboards to draw, light ones first (screen order, then viewport order), then the dark twins. */
   plan: PlannedArtboard[];
   /** Artboards left out past `CHECK_ARTBOARDS_MAX`, in plan order (so dark twins go first). */
   overLimit: PlannedArtboard[];
-  /** Every viewport the plan names, the dark twins labelled ", dark": for the findings' sentences. */
-  viewports: Viewport[];
+  /**
+   * Every size the plan draws, per screen (the dark twins labelled ", dark"), for the findings' sentences.
+   * Keyed by screen as well as id: two screens may use one viewport id at different sizes.
+   */
+  viewports: ScreenViewport[];
 };
 
 /**
@@ -40,12 +46,13 @@ export const planScreenArtboards = (
 ): ScreenPlan => {
   const screens = detail.screens.filter((screen) => screen.problem === null && (options.only === null || options.only.includes(screen.id)));
   const all: PlannedArtboard[] = [];
-  const viewports = new Map<string, Viewport>();
+  const viewports = new Map<string, ScreenViewport>();
   for (const scheme of (['light', 'dark'] as const).filter((candidate) => options.schemes.includes(candidate))) {
     for (const screen of screens) {
       for (const viewport of screenViewportsOf(detail, screen)) {
         const drawn: Viewport = scheme === 'dark' ? { id: darkViewportId(viewport.id), label: `${viewport.label}, dark`, width: viewport.width, height: viewport.height } : viewport;
-        if (!viewports.has(drawn.id)) viewports.set(drawn.id, drawn);
+        const key = `${screen.id}|${drawn.id}`;
+        if (!viewports.has(key)) viewports.set(key, { ...drawn, screen: screen.id });
         all.push({ file: systemScreenFileOf(screen.id), screen: screen.id, viewport: drawn, ...(scheme === 'dark' ? { scheme: 'dark' as const } : {}) });
       }
     }
