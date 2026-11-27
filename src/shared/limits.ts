@@ -546,6 +546,23 @@ export const BUILD_PROBLEM_VALUE_MAX = 80;
 export const REPO_REL_PATTERN = /^[A-Za-z0-9_][A-Za-z0-9._-]{0,63}(\/[A-Za-z0-9_][A-Za-z0-9._-]{0,63}){0,4}$/;
 export const SYSTEM_PATTERNS_MAX = 100;
 export const SYSTEM_BRAND_MAX = 100;
+
+// ---- System builder depth (documentation/specs/system-builder-depth.md §4.3, §4.5) ----
+
+/** Colour pairs per system, declared and automatic together. */
+export const SYSTEM_PAIRS_MAX = 60;
+/** Size names per component (as variants and states, which take 20). */
+export const SYSTEM_COMPONENT_SIZES_MAX = 10;
+/** `outOfScope` topic ids per system (more than the checklist has, so a full list always fits). */
+export const SYSTEM_OUT_OF_SCOPE_MAX = 40;
+/** One shipped reference doc of the builder skill, and all of them together, in characters (T3's build). */
+export const SYSTEM_REFERENCE_DOC_MAX = 12_000;
+export const SYSTEM_REFERENCE_TOTAL_MAX = 80_000;
+/** Checklist topic ids a `system-coverage-gap` finding names in its detail. */
+export const SYSTEM_GAP_TOPICS_SHOWN = 8;
+/** Example labels (`data-dc-variant|size|state`) read per example file, and characters of one value. */
+export const SYSTEM_EXAMPLE_LABELS_MAX = 500;
+export const SYSTEM_EXAMPLE_LABEL_VALUE_MAX = 40;
 /** The staged living page, in UTF-8 bytes (encoded assets included). */
 export const LIVING_PAGE_MAX_BYTES = 20 * 1024 * 1024;
 /** One font or logo embedded into the living page. */

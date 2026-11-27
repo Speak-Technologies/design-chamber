@@ -1,0 +1,487 @@
+{
+  "detail": {
+    "id": "acme",
+    "name": "Acme",
+    "path": "/designs/_systems/acme",
+    "status": "draft",
+    "revision": 0,
+    "created": "2026-11-19T10:00:00.000Z",
+    "updated": "2026-11-19T10:00:00.000Z",
+    "sessionId": null,
+    "sources": {
+      "code": null,
+      "brand": 0,
+      "description": false
+    },
+    "review": {
+      "overview": {
+        "state": "not-reviewed",
+        "note": null
+      },
+      "colours": {
+        "state": "not-reviewed",
+        "note": null
+      },
+      "typography": {
+        "state": "not-reviewed",
+        "note": null
+      },
+      "spacing": {
+        "state": "not-reviewed",
+        "note": null
+      },
+      "radius": {
+        "state": "not-reviewed",
+        "note": null
+      },
+      "shadows": {
+        "state": "not-reviewed",
+        "note": null
+      },
+      "layers": {
+        "state": "not-reviewed",
+        "note": null
+      },
+      "sizes": {
+        "state": "not-reviewed",
+        "note": null
+      },
+      "components": {
+        "state": "not-reviewed",
+        "note": null
+      },
+      "patterns": {
+        "state": "not-reviewed",
+        "note": null
+      },
+      "brand": {
+        "state": "not-reviewed",
+        "note": null
+      },
+      "assets": {
+        "state": "not-reviewed",
+        "note": null
+      }
+    },
+    "changesToReview": false,
+    "overview": {
+      "text": "Calm and plain.",
+      "problem": null
+    },
+    "notes": [
+      {
+        "id": "history",
+        "title": "History",
+        "text": "Why.",
+        "problem": null,
+        "layout": null
+      }
+    ],
+    "tokens": [
+      {
+        "name": "--bg",
+        "section": "colours",
+        "group": "surface",
+        "light": {
+          "text": "#ffffff",
+          "editable": "ok",
+          "problem": null
+        },
+        "dark": {
+          "text": "#111111",
+          "editable": "ok",
+          "problem": null
+        },
+        "note": "Page ground.",
+        "breakpoint": false,
+        "alsoSet": [],
+        "fromCode": false,
+        "problem": null
+      },
+      {
+        "name": "--surface",
+        "section": "colours",
+        "group": "surface",
+        "light": {
+          "text": "#f6f6f4",
+          "editable": "ok",
+          "problem": null
+        },
+        "dark": null,
+        "note": "",
+        "breakpoint": false,
+        "alsoSet": [],
+        "fromCode": false,
+        "problem": null
+      },
+      {
+        "name": "--fg",
+        "section": "colours",
+        "group": "text",
+        "light": {
+          "text": "#1b1b1b",
+          "editable": "ok",
+          "problem": null
+        },
+        "dark": {
+          "text": "#f2f2f2",
+          "editable": "ok",
+          "problem": null
+        },
+        "note": "",
+        "breakpoint": false,
+        "alsoSet": [],
+        "fromCode": false,
+        "problem": null
+      },
+      {
+        "name": "--accent",
+        "section": "colours",
+        "group": "brand",
+        "light": {
+          "text": "#2456d6",
+          "editable": "ok",
+          "problem": null
+        },
+        "dark": {
+          "text": "#7aa2ff",
+          "editable": "ok",
+          "problem": null
+        },
+        "note": "Primary actions.",
+        "breakpoint": false,
+        "alsoSet": [],
+        "fromCode": false,
+        "problem": null
+      },
+      {
+        "name": "--accent-fg",
+        "section": "colours",
+        "group": "text",
+        "light": {
+          "text": "#ffffff",
+          "editable": "ok",
+          "problem": null
+        },
+        "dark": null,
+        "note": "",
+        "breakpoint": false,
+        "alsoSet": [],
+        "fromCode": false,
+        "problem": null
+      },
+      {
+        "name": "--on-brand",
+        "section": "colours",
+        "group": "text",
+        "light": {
+          "text": "#ffffff",
+          "editable": "ok",
+          "problem": null
+        },
+        "dark": null,
+        "note": "",
+        "breakpoint": false,
+        "alsoSet": [],
+        "fromCode": false,
+        "problem": null
+      },
+      {
+        "name": "--brand",
+        "section": "colours",
+        "group": "brand",
+        "light": {
+          "text": "#c2410c",
+          "editable": "ok",
+          "problem": null
+        },
+        "dark": null,
+        "note": "",
+        "breakpoint": false,
+        "alsoSet": [],
+        "fromCode": false,
+        "problem": null
+      },
+      {
+        "name": "--success",
+        "section": "colours",
+        "group": "status",
+        "light": {
+          "text": "#15803d",
+          "editable": "ok",
+          "problem": null
+        },
+        "dark": null,
+        "note": "",
+        "breakpoint": false,
+        "alsoSet": [],
+        "fromCode": false,
+        "problem": null
+      },
+      {
+        "name": "--space-2",
+        "section": "spacing",
+        "group": null,
+        "light": {
+          "text": "8px",
+          "editable": "ok",
+          "problem": null
+        },
+        "dark": null,
+        "note": "",
+        "breakpoint": false,
+        "alsoSet": [],
+        "fromCode": false,
+        "problem": null
+      },
+      {
+        "name": "--space-4",
+        "section": "spacing",
+        "group": null,
+        "light": {
+          "text": "16px",
+          "editable": "ok",
+          "problem": null
+        },
+        "dark": null,
+        "note": "",
+        "breakpoint": false,
+        "alsoSet": [],
+        "fromCode": false,
+        "problem": null
+      },
+      {
+        "name": "--radius-md",
+        "section": "radius",
+        "group": null,
+        "light": {
+          "text": "8px",
+          "editable": "ok",
+          "problem": null
+        },
+        "dark": null,
+        "note": "",
+        "breakpoint": false,
+        "alsoSet": [],
+        "fromCode": false,
+        "problem": null
+      },
+      {
+        "name": "--shadow-1",
+        "section": "shadows",
+        "group": null,
+        "light": {
+          "text": "0 1px 2px rgb(0 0 0 / 0.2)",
+          "editable": "ok",
+          "problem": null
+        },
+        "dark": null,
+        "note": "",
+        "breakpoint": false,
+        "alsoSet": [],
+        "fromCode": false,
+        "problem": null
+      },
+      {
+        "name": "--z-modal",
+        "section": "layers",
+        "group": null,
+        "light": {
+          "text": "100",
+          "editable": "ok",
+          "problem": null
+        },
+        "dark": null,
+        "note": "",
+        "breakpoint": false,
+        "alsoSet": [],
+        "fromCode": false,
+        "problem": null
+      },
+      {
+        "name": "--control-md",
+        "section": "other",
+        "group": null,
+        "light": {
+          "text": "40px",
+          "editable": "ok",
+          "problem": null
+        },
+        "dark": null,
+        "note": "",
+        "breakpoint": false,
+        "alsoSet": [],
+        "fromCode": false,
+        "problem": null
+      }
+    ],
+    "type": [
+      {
+        "id": "body",
+        "name": "Body",
+        "family": "Inter",
+        "size": "16px",
+        "weight": "400",
+        "lineHeight": "1.5",
+        "letterSpacing": "",
+        "case": "none",
+        "note": ""
+      },
+      {
+        "id": "heading",
+        "name": "Heading",
+        "family": "",
+        "size": "28px",
+        "weight": "600",
+        "lineHeight": "",
+        "letterSpacing": "",
+        "case": "none",
+        "note": "Page titles."
+      }
+    ],
+    "fonts": [
+      {
+        "file": "assets/fonts/inter.woff2",
+        "family": "Inter",
+        "weight": 400,
+        "style": "normal"
+      }
+    ],
+    "logos": [
+      {
+        "file": "assets/logos/mark.svg",
+        "variant": "mark",
+        "note": "Small spaces."
+      }
+    ],
+    "sourceFiles": [],
+    "components": [
+      {
+        "id": "button",
+        "name": "Button",
+        "purpose": "Actions.",
+        "note": "",
+        "variants": [
+          "primary",
+          "ghost"
+        ],
+        "states": [
+          "hover",
+          "disabled"
+        ],
+        "tokens": [
+          "--accent"
+        ],
+        "source": null,
+        "example": {
+          "remote": []
+        },
+        "undefinedTokens": [],
+        "layout": "compact"
+      },
+      {
+        "id": "card",
+        "name": "Card",
+        "purpose": "",
+        "note": "",
+        "variants": [],
+        "states": [],
+        "tokens": [
+          "--surface",
+          "--missing"
+        ],
+        "source": null,
+        "example": null,
+        "undefinedTokens": [
+          "--missing"
+        ],
+        "layout": null
+      }
+    ],
+    "problems": [],
+    "unreadable": null,
+    "stamps": {
+      "tokens": "661de0402d33f6082f49f927bf5e4e9714ac49e247e59753872ba8a63453e261",
+      "systemJson": "8e67b714af0813bce161d1d4bd317928fb106b71c43e724d52d546433adbf83f",
+      "overview": "da71e87a8bd030deb9de9ae887e7273ff0b17023c0249f0397fef7e1a6ea3822",
+      "notes": {
+        "notes/history.md": "9aaee400beef077c74f0e4d649a8d9255467a3f2342a7172f4d27e50a2cd27b0",
+        "patterns/voice.md": "b7c6c8db5128c47799471bb92aa3f4f8ad8edb0d59359f3ea86798bb34d2e984"
+      }
+    },
+    "usedBy": 0,
+    "isDefault": false,
+    "pinnedFor": [],
+    "empty": false,
+    "home": {
+      "kind": "internal"
+    },
+    "editable": true,
+    "build": null,
+    "buildProblem": null,
+    "coverage": [
+      "foundations",
+      "components",
+      "patterns",
+      "brand"
+    ],
+    "patterns": [
+      {
+        "id": "voice",
+        "kind": "voice",
+        "title": "Voice",
+        "note": "Plain words.",
+        "text": "Short words.",
+        "problem": null,
+        "layout": null
+      },
+      {
+        "id": "grid",
+        "kind": "layout",
+        "title": "Grid",
+        "note": "",
+        "text": null,
+        "problem": null,
+        "layout": "full"
+      }
+    ],
+    "brand": [
+      {
+        "id": "hero",
+        "kind": "marketing",
+        "title": "Heroes",
+        "note": "",
+        "text": null,
+        "problem": null,
+        "layout": null
+      }
+    ],
+    "snapshot": null,
+    "codeDrift": null,
+    "livingPage": null,
+    "proposal": null,
+    "landed": null,
+    "agentDrift": null,
+    "boardLayout": {
+      "sections": {
+        "colours": "compact"
+      },
+      "ignored": [],
+      "ignoredCount": 0
+    }
+  },
+  "fingerprints": {
+    "overview": "531c06727454a3ccc0e24b19f6b1d1b43b6c7a480946c81fc273da47141893d0",
+    "colours": "90cf75e9d265b33878066cb6eeaa0be30898293a7b975a699a1c94f8d57b2cc6",
+    "typography": "c9b2ff934ff18c88e817821e3324e070f8b31a5faf28328dfdf0ad8f8ee326fe",
+    "spacing": "33a8606552a80a199faf7f940d619f733deac19402ce431c9b1425050f416b8c",
+    "radius": "26f99d8355de54faa1b1fdb66f2ecf171b84472e5460fe062c9744ce11c3c9ea",
+    "shadows": "2862348bae3b292330a953607de2fec7d57b0944f47497a5e341649c7b4a6793",
+    "layers": "9275f67dc3d8c23327019a60f1a2f6123645eb06d0d750cd0af89539f8d21d61",
+    "sizes": "3d78aed2d927fba5b55996ef343f41dd28713e1962325267a17f9507fccb3751",
+    "components": "3421b16afa04efd64fd7867c90a90ef5a509742a9a0802b5d49a577b8ea275a7",
+    "patterns": "054f99f1a1b16b09e43b24f0cd83fb150dcb2018f0cf1de8467f9490b35d62b9",
+    "brand": "9634d06717de24dfc54019322beb4725ed765134a2bf3381e4aee0d49acf1d13",
+    "assets": "7a7bec76236c472f52bf9a8e5ab7305b8275a4b94f42da640a47ea6b56d225f3"
+  }
+}

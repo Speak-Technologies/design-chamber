@@ -27,8 +27,11 @@ import {
   SYSTEM_BUILD_CALLS_MAX,
   SYSTEM_BUILD_JSON_MAX_BYTES,
   SYSTEM_BUILD_TICKET_PATTERN,
+  SYSTEM_COMPONENT_SIZES_MAX,
   SYSTEM_COMPONENTS_MAX,
   SYSTEM_ENTRY_ID_PATTERN,
+  SYSTEM_OUT_OF_SCOPE_MAX,
+  SYSTEM_PAIRS_MAX,
   SYSTEM_EXAMPLE_MAX,
   SYSTEM_ID_PATTERN,
   SYSTEM_JSON_MAX_BYTES,
@@ -48,6 +51,7 @@ import {
   SYSTEM_TYPE_STYLES_MAX,
   SYSTEM_USAGE_NOTE_MAX,
 } from './limits.ts';
+import { isSystemTopicId } from './system-checklist.ts';
 import { classifyToken, isDarkContext, isLightContext, validateTokenValue, type TypeField, type ValueCheck } from './token-edit.ts';
 import { ALSO_SET_MAX, scanTokens, type Declaration, type TokenContext } from './tokens-css.ts';
 import type {
@@ -56,6 +60,7 @@ import type {
   BuildView,
   CandidateMark,
   ColourGroup,
+  ColourPairUse,
   FontAsset,
   IsoDate,
   JsonObject,
@@ -70,13 +75,16 @@ import type {
   ReviewState,
   SourceLine,
   SystemArea,
+  SystemColourPair,
   SystemComponent,
+  SystemDepth,
   SystemDetail,
   SystemEntryText,
   SystemHomeView,
   SystemSection,
   SystemState,
   SystemToken,
+  SystemTopicId,
   TokenSection,
   TokenValue,
   TypeStyle,
@@ -159,7 +167,7 @@ const NOT_JSON = `${SYSTEM_UNREADABLE_PREFIX} system.json isn't valid JSON.`;
 const TOO_LARGE_JSON = `${SYSTEM_UNREADABLE_PREFIX} system.json is larger than 1 MB.`;
 
 /** The list keys of system.json; each must be a list when present. */
-const LIST_KEYS = ['type', 'fonts', 'logos', 'components', 'notes', 'sources', 'patterns', 'brand'] as const;
+const LIST_KEYS = ['type', 'fonts', 'logos', 'components', 'notes', 'sources', 'patterns', 'brand', 'pairs', 'outOfScope'] as const;
 
 export const parseSystemJson = (text: string): ParsedSystemJson => {
   // A cheap bound first: every UTF-16 unit is at most 3 UTF-8 bytes.
@@ -891,6 +899,27 @@ const shortList = (value: unknown, max: number, itemMax: number): string[] | nul
   return stringList(value, max, itemMax);
 };
 
+/**
+ * An entry's `example`: absent or null → none; exactly `<folder>/<id>.html` and present → an example
+ * (its remote refs are found while the board bundles it); anything else → none plus a problem on the
+ * entry, which itself stays (components since T6, pattern and brand entries since system-builder-depth D4).
+ */
+const readExample = (
+  value: JsonValue | undefined,
+  folder: 'components' | 'patterns' | 'brand',
+  id: string,
+  files: ReadonlySet<string>,
+  entry: string,
+  problems: SystemProblem[],
+): { remote: string[] } | null => {
+  if (value === undefined || value === null) return null;
+  const expected = `${folder}/${id}.html`;
+  if (value !== expected) problems.push({ entry, message: `Its example must be ${expected}.` });
+  else if (!files.has(expected)) problems.push({ entry, message: `${expected} is missing.` });
+  else return { remote: [] };
+  return null;
+};
+
 const readComponents = (
   raw: JsonObject | null,
   files: ReadonlySet<string>,
@@ -911,23 +940,17 @@ const readComponents = (
     const purpose = noteText(own(value, 'purpose'), SYSTEM_USAGE_NOTE_MAX);
     const note = noteText(own(value, 'note'), SYSTEM_USAGE_NOTE_MAX);
     const variants = shortList(own(value, 'variants'), 20, 40);
+    const sizes = shortList(own(value, 'sizes'), SYSTEM_COMPONENT_SIZES_MAX, 40);
     const states = shortList(own(value, 'states'), 20, 40);
     const tokenNames = shortList(own(value, 'tokens'), 40, 61);
     const source = own(value, 'source');
     if (purpose === null || note === null) return void problems.push({ entry, message: 'Its purpose and note can each be up to 500 characters.' });
     if (variants === null || states === null) return void problems.push({ entry, message: 'Variants and states are lists of up to 20 short names.' });
+    if (sizes === null) return void problems.push({ entry, message: 'Sizes is a list of up to 10 short names.' });
     if (tokenNames === null || !tokenNames.every((token) => SYSTEM_TOKEN_NAME_PATTERN.test(token))) return void problems.push({ entry, message: 'Its tokens must be a list of up to 40 token names.' });
     if (source !== undefined && source !== null && (typeof source !== 'string' || source.length > 300)) return void problems.push({ entry, message: 'Its source is text of up to 300 characters.' });
     const layout = readItemLayout(own(value, 'layout'), entry, layoutSink);
-    const exampleValue = own(value, 'example');
-    let example: SystemComponent['example'] = null;
-    if (exampleValue !== undefined && exampleValue !== null) {
-      const expected = `components/${id}.html`;
-      if (exampleValue !== expected) problems.push({ entry, message: `Its example must be ${expected}.` });
-      else if (!files.has(expected)) problems.push({ entry, message: `${expected} is missing.` });
-      // The remote refs are found while the board bundles the example (T6).
-      else example = { remote: [] };
-    }
+    const example = readExample(own(value, 'example'), 'components', id, files, entry, problems);
     seen.add(id);
     out.push({
       id,
@@ -935,6 +958,7 @@ const readComponents = (
       purpose,
       note,
       variants,
+      sizes,
       states,
       tokens: tokenNames,
       source: typeof source === 'string' && source !== '' ? source : null,
@@ -978,14 +1002,19 @@ const readNotes = (raw: JsonObject | null, texts: Readonly<Record<string, string
   return out;
 };
 
-const ENTRY_KINDS: Readonly<Record<'patterns' | 'brand', readonly string[]>> = {
-  patterns: ['layout', 'do-dont', 'voice', 'other'],
-  brand: ['marketing', 'imagery', 'logo-use', 'other'],
-};
+/** The closed kind lists (system-builder-depth §4.3 adds the second half of each). */
+export const ENTRY_KINDS: Readonly<Record<'patterns' | 'brand', readonly string[]>> = Object.freeze({
+  patterns: Object.freeze([
+    'layout', 'do-dont', 'voice', 'other',
+    'navigation', 'overlay', 'forms', 'data-display', 'feedback', 'states', 'page', 'responsive', 'motion', 'accessibility',
+  ]),
+  brand: Object.freeze(['marketing', 'imagery', 'logo-use', 'other', 'colour', 'social', 'email']),
+});
 
 const readEntryTexts = (
   key: 'patterns' | 'brand',
   raw: JsonObject | null,
+  files: ReadonlySet<string>,
   texts: Readonly<Record<string, string>>,
   tooLarge: ReadonlySet<string>,
   problems: SystemProblem[],
@@ -1008,9 +1037,102 @@ const readEntryTexts = (
     if (note === null) return void problems.push({ entry, message: 'Its note is longer than 500 characters.' });
     const body = bodyOf(`${key}/${id}.md`, texts, tooLarge, SYSTEM_NOTE_MAX, false);
     const layout = readItemLayout(own(value, 'layout'), entry, layoutSink);
+    const example = readExample(own(value, 'example'), key, id, files, entry, problems);
     seen.add(id);
-    out.push({ id, kind, title, note, text: body.text, problem: body.problem, layout });
+    out.push({ id, kind, title, note, text: body.text, problem: body.problem, layout, example });
   });
+  return out;
+};
+
+// ---- depth, pairs, outOfScope (system-builder-depth §4.3) ----
+
+const DEPTHS: readonly SystemDepth[] = ['tokens', 'core', 'full'];
+
+/** `depth`: absent or null → null (no completeness check); a value off the list → null plus a problem. */
+const readDepth = (raw: JsonObject | null, problems: SystemProblem[]): SystemDepth | null => {
+  const value = raw === null ? undefined : own(raw, 'depth');
+  if (value === undefined || value === null) return null;
+  if (typeof value === 'string' && (DEPTHS as readonly string[]).includes(value)) return value as SystemDepth;
+  problems.push({ entry: 'depth', message: 'depth must be tokens, core or full, so the completeness check is off.' });
+  return null;
+};
+
+const PAIR_USES: readonly ColourPairUse[] = ['text', 'large', 'ui'];
+
+/** `--accent-fg` → `--accent`, `--on-primary` → `--primary`: the ground an on-colour is meant for. */
+const groundOf = (name: string): string | null => {
+  const fg = /^--(.+)-fg$/.exec(name);
+  if (fg !== null) return `--${fg[1] ?? ''}`;
+  const on = /^--on-(.+)$/.exec(name);
+  return on === null ? null : `--${on[1] ?? ''}`;
+};
+
+/**
+ * `pairs`: declared pairs whose `fg` and `bg` are colour tokens of this system with a value, then the
+ * automatic ones (§4.3: every `--x-fg` or `--on-x` colour whose `--x` is one, `use: text`, unless
+ * declared). A bad pair is a problem on that pair only; past `SYSTEM_PAIRS_MAX` the declared rest are one
+ * problem with the true count, and automatic pairs stop where the cap is reached.
+ */
+const readPairs = (raw: JsonObject | null, tokens: readonly SystemToken[], problems: SystemProblem[]): SystemColourPair[] => {
+  const colours = new Set(tokens.filter((token) => token.section === 'colours' && (token.light !== null || token.dark !== null)).map((token) => token.name));
+  const out: SystemColourPair[] = [];
+  const declared = new Set<string>();
+  const list = listOf(raw, 'pairs');
+  list.forEach((value, index) => {
+    const entry = `pairs[${index}]`;
+    if (out.length >= SYSTEM_PAIRS_MAX) return;
+    if (!isObject(value)) return void problems.push({ entry, message: 'This pair is not an object.' });
+    const fg = own(value, 'fg');
+    const bg = own(value, 'bg');
+    if (typeof fg !== 'string' || typeof bg !== 'string' || !colours.has(fg) || !colours.has(bg)) {
+      return void problems.push({ entry, message: 'Its fg and bg must be colour tokens this system sets.' });
+    }
+    const use = own(value, 'use') ?? 'text';
+    if (typeof use !== 'string' || !(PAIR_USES as readonly string[]).includes(use)) return void problems.push({ entry, message: 'Its use must be text, large or ui.' });
+    const note = noteText(own(value, 'note'), SYSTEM_USAGE_NOTE_MAX);
+    if (note === null) return void problems.push({ entry, message: 'Its note is longer than 500 characters.' });
+    const key = `${fg}\u0000${bg}`;
+    if (declared.has(key)) return void problems.push({ entry, message: 'This pair is listed twice.' });
+    declared.add(key);
+    out.push({ fg, bg, use: use as ColourPairUse, note, auto: false });
+  });
+  if (list.length > SYSTEM_PAIRS_MAX) {
+    problems.push({ entry: 'pairs', message: `Design systems hold up to ${SYSTEM_PAIRS_MAX} colour pairs. ${groupDigits(list.length - SYSTEM_PAIRS_MAX)} more weren't read.` });
+  }
+  for (const name of colours) {
+    if (out.length >= SYSTEM_PAIRS_MAX) break;
+    const ground = groundOf(name);
+    if (ground === null || !colours.has(ground) || declared.has(`${name}\u0000${ground}`)) continue;
+    out.push({ fg: name, bg: ground, use: 'text', note: '', auto: true });
+  }
+  return out;
+};
+
+/**
+ * `outOfScope`: checklist topic ids the agent decided this system does not cover (the user's decision 4).
+ * Known ids only, each once, in the order written; unknown ones are one problem naming up to three
+ * (cleaned and clipped); past `SYSTEM_OUT_OF_SCOPE_MAX` the rest are one problem with the true count.
+ */
+const readOutOfScope = (raw: JsonObject | null, problems: SystemProblem[]): SystemTopicId[] => {
+  const list = listOf(raw, 'outOfScope');
+  const out: SystemTopicId[] = [];
+  const unknown: string[] = [];
+  let unknownCount = 0;
+  for (const value of list.slice(0, SYSTEM_OUT_OF_SCOPE_MAX)) {
+    if (isSystemTopicId(value)) {
+      if (!out.includes(value)) out.push(value);
+      continue;
+    }
+    unknownCount += 1;
+    if (unknown.length < 3) unknown.push(`"${layoutValueText(value)}"`);
+  }
+  if (unknownCount > 0) {
+    const more = unknownCount > unknown.length ? ` and ${unknownCount - unknown.length} more` : '';
+    problems.push({ entry: 'outOfScope', message: `${unknown.join(', ')}${more} ${unknownCount === 1 ? "isn't a checklist topic" : "aren't checklist topics"}, so ${unknownCount === 1 ? 'it was' : 'they were'} skipped.` });
+  }
+  if (list.length > SYSTEM_OUT_OF_SCOPE_MAX) {
+    problems.push({ entry: 'outOfScope', message: `outOfScope holds up to ${SYSTEM_OUT_OF_SCOPE_MAX} topic ids. ${groupDigits(list.length - SYSTEM_OUT_OF_SCOPE_MAX)} more weren't read.` });
+  }
   return out;
 };
 
@@ -1144,10 +1266,13 @@ export const buildSystemDetail = (source: SystemDetailSource, rules: SystemToken
   const sectionLayouts = readSectionLayouts(raw, layoutSink);
   const components = readComponents(raw, files, defined, problems, layoutSink);
   const notes = readNotes(raw, source.texts, tooLarge, problems, layoutSink);
-  const patterns = readEntryTexts('patterns', raw, source.texts, tooLarge, problems, layoutSink);
-  const brand = readEntryTexts('brand', raw, source.texts, tooLarge, problems, layoutSink);
+  const patterns = readEntryTexts('patterns', raw, files, source.texts, tooLarge, problems, layoutSink);
+  const brand = readEntryTexts('brand', raw, files, source.texts, tooLarge, problems, layoutSink);
   const coverage = coveredAreas(raw);
   if (coverage.problem !== null) problems.push({ entry: 'coverage', message: coverage.problem });
+  const depth = readDepth(raw, problems);
+  const pairs = readPairs(raw, tokens, problems);
+  const outOfScope = readOutOfScope(raw, problems);
 
   const overviewBody = bodyOf('OVERVIEW.md', source.texts, tooLarge, SYSTEM_OVERVIEW_MAX, false);
   const overview = overviewBody.text === null && overviewBody.problem === null ? null : { text: overviewBody.text ?? '', problem: overviewBody.problem };
@@ -1220,6 +1345,9 @@ export const buildSystemDetail = (source: SystemDetailSource, rules: SystemToken
     landed: state.landed ? { ...state.landed, sentence: landedSentence(state.landed, home.kind === 'repo' ? home.label : 'your code') } : null,
     agentDrift: source.build?.drift ?? null,
     boardLayout: { sections: sectionLayouts, ignored: layoutSink.ignored, ignoredCount: layoutSink.ignoredCount },
+    depth,
+    pairs,
+    outOfScope,
   };
   const derived = deriveReview(state, sectionFingerprints(detail, source.hashes ?? {}));
   detail.review = derived.review;
@@ -1266,9 +1394,21 @@ export const sectionFingerprints = (detail: SystemDetail, hashes: Readonly<Recor
       .map(tokenFacts);
   const textHash = (text: string | null): string | null => (text === null ? null : sha256Hex(text));
   const logos = detail.logos.map((logo) => ({ ...logo, hash: fileHash(logo.file) }));
+  // system-builder-depth §4.3: the new facts join only when present, so a system written before them
+  // keeps every fingerprint (and its reviews). Automatic pairs come from tokens already counted, and
+  // `depth` and `outOfScope` are about the checklist, not content: none of them joins.
+  const declaredPairs = detail.pairs.filter((pair) => !pair.auto).map((pair) => ({ fg: pair.fg, bg: pair.bg, use: pair.use, note: pair.note }));
+  const entryFacts = (folder: 'patterns' | 'brand', entry: SystemEntryText): unknown => ({
+    id: entry.id,
+    kind: entry.kind,
+    title: entry.title,
+    note: entry.note,
+    body: textHash(entry.text),
+    ...(entry.example === null ? {} : { example: fileHash(`${folder}/${entry.id}.html`) }),
+  });
   const facts: Record<SystemSection, unknown> = {
     overview: { overview: textHash(detail.overview?.text ?? null), notes: detail.notes.map((note) => ({ id: note.id, title: note.title, body: textHash(note.text) })) },
-    colours: tokensOf(['colours']),
+    colours: declaredPairs.length === 0 ? tokensOf(['colours']) : { tokens: tokensOf(['colours']), pairs: declaredPairs },
     typography: { tokens: tokensOf(['typography']), type: detail.type },
     spacing: tokensOf(['spacing']),
     radius: tokensOf(['radius']),
@@ -1285,9 +1425,10 @@ export const sectionFingerprints = (detail: SystemDetail, hashes: Readonly<Recor
       tokens: component.tokens,
       source: component.source,
       example: component.example === null ? null : fileHash(`components/${component.id}.html`),
+      ...(component.sizes.length === 0 ? {} : { sizes: component.sizes }),
     })),
-    patterns: detail.patterns.map((entry) => ({ id: entry.id, kind: entry.kind, title: entry.title, note: entry.note, body: textHash(entry.text) })),
-    brand: { entries: detail.brand.map((entry) => ({ id: entry.id, kind: entry.kind, title: entry.title, note: entry.note, body: textHash(entry.text) })), logos },
+    patterns: detail.patterns.map((entry) => entryFacts('patterns', entry)),
+    brand: { entries: detail.brand.map((entry) => entryFacts('brand', entry)), logos },
     assets: {
       fonts: detail.fonts.map((font) => ({ ...font, hash: fileHash(font.file) })),
       sources: detail.sourceFiles.map((file) => ({ file: file.file, hash: fileHash(file.file) })),
@@ -1398,8 +1539,9 @@ export const isSystemContractRel = (rel: string): boolean => {
   if (rel === 'system.json' || rel === 'tokens.css' || rel === 'OVERVIEW.md') return true;
   const entry = /^(notes|patterns|brand)\/([^/]+)\.md$/.exec(rel);
   if (entry !== null) return SYSTEM_ENTRY_ID_PATTERN.test(entry[2] ?? '');
-  const component = /^components\/([^/]+)\.html$/.exec(rel);
-  if (component !== null) return SYSTEM_ENTRY_ID_PATTERN.test(component[1] ?? '');
+  // Live examples: components, and pattern and brand entries (system-builder-depth D4).
+  const example = /^(components|patterns|brand)\/([^/]+)\.html$/.exec(rel);
+  if (example !== null) return SYSTEM_ENTRY_ID_PATTERN.test(example[2] ?? '');
   const asset = /^(assets\/fonts|assets\/logos|sources)\/([^/]+)$/.exec(rel);
   return asset !== null && SAFE_FILE_PATTERN.test(asset[2] ?? '') && !(asset[2] ?? '').includes('..');
 };
