@@ -1,8 +1,8 @@
 // What the linked agent is doing to this design right now (documentation/specs/phase-1-review-loop.md §2).
 // Two sources the frame already has: file events for the design (the change feed) and the linked
-// chat's activity (`onSessions`). A pure reducer folds them, with the design detail and the
-// feed status, into one `BuildTrack`; `phaseOf` turns a track and the clock into the phase the
-// strip shows (first match wins); `nextDeadline` says when that can change by time alone, so the
+// chat's activity and current tool call (`onSessions`). A pure reducer folds them, with the design
+// detail and the feed status, into one `BuildTrack`; `phaseOf` turns a track and the clock into the
+// phase the strip shows (first match wins); `nextDeadline` says when that can change by time alone, so the
 // watcher keeps one `setTimeout` and never polls. No UI here, and no host call but the
 // read-only `listProjects` and `onSessions`.
 
@@ -15,6 +15,7 @@ import { sameDirectory } from '../shared/path-compare.ts';
 import type { ChangeEvent } from '../shared/types.ts';
 import type { ChangeFeed, FeedStatus } from './changes.ts';
 import type { GuestHost } from './host.ts';
+import { readSessionTool, type SessionTool } from './session-tool.ts';
 
 // ---- Timings (read only by this module, its tests and the strip's copy) ----
 
@@ -45,7 +46,7 @@ export type TurnOutcome = 'completed' | 'failed' | null;
 
 export type BuildInput =
   | { kind: 'files'; at: number; files: string[]; created: boolean } // already filtered by `agentFiles`
-  | { kind: 'session'; at: number; activity: LinkedActivity; outcome: TurnOutcome }
+  | { kind: 'session'; at: number; activity: LinkedActivity; outcome: TurnOutcome; tool: SessionTool | null }
   | { kind: 'detail'; at: number; pending: boolean; created: number; screensWritten: number; screensTotal: number; isCanvas: boolean }
   | { kind: 'feed'; at: number; state: FeedStatus['state'] }
   | { kind: 'dismiss'; at: number }
@@ -57,6 +58,8 @@ export type BuildInput =
 export type BuildTrack = {
   activity: LinkedActivity;
   outcome: TurnOutcome;
+  /** The linked agent's tool call, only while its chat is `running` (native-extras §1.2). Never changes the phase. */
+  tool: SessionTool | null;
   turnStartedAt: number | null;
   /** This frame saw the turn start, so Done and Failed may be claimed for it. */
   turnSeen: boolean;
@@ -85,6 +88,7 @@ export type BuildPhase = 'hidden' | 'offline' | 'question' | 'permission' | 'fai
 export const initialTrack = (now: number): BuildTrack => ({
   activity: 'none',
   outcome: null,
+  tool: null,
   turnStartedAt: null,
   turnSeen: false,
   idleAt: null,
@@ -148,6 +152,9 @@ const turnOver = (track: BuildTrack): boolean => track.turnSeen && track.activit
  */
 const showsWriting = (track: BuildTrack): boolean => track.lastFile !== null && !turnOver(track) && track.activity !== 'idle';
 
+const sameTool = (a: SessionTool | null, b: SessionTool | null): boolean =>
+  a === b || (a !== null && b !== null && a.name === b.name && a.target === b.target);
+
 const mergeFiles = (known: readonly string[], more: readonly string[]): string[] => [...new Set([...known, ...more])].slice(0, TURN_FILES_MAX);
 
 export const reduceBuild = (track: BuildTrack, input: BuildInput): BuildTrack => {
@@ -160,13 +167,17 @@ export const reduceBuild = (track: BuildTrack, input: BuildInput): BuildTrack =>
       return { ...track, lastFile: { path, at: input.at }, turnFiles: mergeFiles(track.turnFiles, input.files), pending: false, dismissedAt: null };
     }
     case 'session': {
+      // Only a running chat has a call to name. The host says the same; this does not rely on it.
+      const tool = input.activity === 'running' ? input.tool : null;
       if (input.activity === 'unknown') {
-        // The host does not know (a reconnect): hold the last known state, for a while.
-        return track.unknownSince !== null ? track : { ...track, unknownSince: input.at };
+        // The host does not know (a reconnect): hold the last known state, for a while. The call is not held.
+        return track.unknownSince !== null ? track : { ...track, unknownSince: input.at, tool };
       }
       const held = track.unknownSince !== null;
-      if (track.activity === input.activity && track.outcome === input.outcome) return held ? { ...track, unknownSince: null } : track;
-      let next: BuildTrack = { ...track, activity: input.activity, outcome: input.outcome, unknownSince: null };
+      if (track.activity === input.activity && track.outcome === input.outcome && sameTool(track.tool, tool)) {
+        return held ? { ...track, unknownSince: null } : track;
+      }
+      let next: BuildTrack = { ...track, activity: input.activity, outcome: input.outcome, tool, unknownSince: null };
       const wasActive = isActive(track.activity);
       const nowActive = isActive(input.activity);
       if (!wasActive && nowActive) {
@@ -314,7 +325,8 @@ export const watchBuildActivity = (deps: BuildActivityDeps): BuildActivity => {
     notify();
   };
 
-  const applySession = (activity: LinkedActivity, outcome: TurnOutcome = null): void => apply({ kind: 'session', at: now(), activity, outcome });
+  const applySession = (activity: LinkedActivity, outcome: TurnOutcome = null, tool: SessionTool | null = null): void =>
+    apply({ kind: 'session', at: now(), activity, outcome, tool });
 
   // ---- session activity ----
 
@@ -337,7 +349,7 @@ export const watchBuildActivity = (deps: BuildActivityDeps): BuildActivity => {
     }
     fallback = false;
     const found = snapshot.sessions.find((session) => session.id === sessionId);
-    if (found) applySession(found.activity, found.outcome);
+    if (found) applySession(found.activity, found.outcome, readSessionTool(found.tool));
     else applySession('gone');
   };
 

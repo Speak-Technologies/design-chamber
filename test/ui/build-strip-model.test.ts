@@ -12,7 +12,7 @@ const MIN = 60 * SEC;
 const WRITING_MS = 15 * SEC;
 
 const run = (...inputs: BuildInput[]): BuildTrack => inputs.reduce<BuildTrack>((track, input) => reduceBuild(track, input), initialTrack(T0));
-const sess = (at: number, activity: LinkedActivity, outcome: 'completed' | 'failed' | null = null): BuildInput => ({ kind: 'session', at, activity, outcome });
+const sess = (at: number, activity: LinkedActivity, outcome: 'completed' | 'failed' | null = null): BuildInput => ({ kind: 'session', at, activity, outcome, tool: null });
 const files = (at: number, list: string[], created = false): BuildInput => ({ kind: 'files', at, files: list, created });
 const detail = (over: Partial<Extract<BuildInput, { kind: 'detail' }>> = {}): BuildInput => ({
   kind: 'detail',

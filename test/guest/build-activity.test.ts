@@ -33,13 +33,20 @@ import {
 import type { ChangeBatch, ChangeFeed, FeedStatus } from '../../src/guest/changes.ts';
 import { createFakeHost } from '../../src/guest/fake-services.ts';
 import { createGuestHost } from '../../src/guest/host.ts';
+import type { SessionTool } from '../../src/guest/session-tool.ts';
 
 const T0 = 1_000_000;
 const SEC = 1000;
 
 // ---- helpers: inputs and a reducer run ----
 
-const sess = (at: number, activity: LinkedActivity, outcome: 'completed' | 'failed' | null = null): BuildInput => ({ kind: 'session', at, activity, outcome });
+const sess = (at: number, activity: LinkedActivity, outcome: 'completed' | 'failed' | null = null, tool: SessionTool | null = null): BuildInput => ({
+  kind: 'session',
+  at,
+  activity,
+  outcome,
+  tool,
+});
 const files = (at: number, list: string[], created = false): BuildInput => ({ kind: 'files', at, files: list, created });
 const detail = (at: number, over: Partial<Extract<BuildInput, { kind: 'detail' }>> = {}): BuildInput => ({
   kind: 'detail',
@@ -828,4 +835,122 @@ test('an unknown blip mid-turn (host reconnect) keeps the turn: files and elapse
   assert.equal(track.turnStartedAt, T0 + SEC);
   assert.deepEqual(track.turnFiles, ['screens/a.html']);
   assert.equal(phase(track, T0 + 91 * SEC), 'done');
+});
+
+// ---- the call the agent is running (documentation/specs/native-extras.md §1.2) ----
+
+const READ_THEME: SessionTool = { name: 'read', target: 'src/styles/theme.css' };
+const EDIT_PRICING: SessionTool = { name: 'edit', target: 'screens/pricing.html' };
+const using = (at: number, tool: SessionTool | null): BuildInput => sess(at, 'running', null, tool);
+
+test('tool: a fresh track has none; it is kept while the chat is running', () => {
+  assert.equal(initialTrack(T0).tool, null);
+  assert.deepEqual(run(using(T0, READ_THEME)).tool, READ_THEME);
+});
+
+test('tool: every other activity clears it, even when the input still carries one', () => {
+  for (const activity of ['idle', 'retrying', 'waiting-permission', 'waiting-question', 'gone', 'none', 'unknown'] as const) {
+    const track = run(using(T0, READ_THEME), sess(T0 + SEC, activity, null, READ_THEME));
+    assert.equal(track.tool, null, activity);
+    assert.equal(run(sess(T0, activity, null, READ_THEME)).tool, null, `${activity}, from a fresh track`);
+  }
+});
+
+test('tool: a change of name or of target alone is not swallowed, and does not restart the turn', () => {
+  const first = run(using(T0, READ_THEME), files(T0 + SEC, ['screens/home.html']));
+  const otherTarget = reduceBuild(first, using(T0 + 2 * SEC, { name: 'read', target: 'src/app.ts' }));
+  assert.notEqual(otherTarget, first);
+  assert.equal(otherTarget.tool?.target, 'src/app.ts');
+  const otherName = reduceBuild(otherTarget, using(T0 + 3 * SEC, { name: 'edit', target: 'src/app.ts' }));
+  assert.equal(otherName.tool?.name, 'edit');
+  const noTarget = reduceBuild(otherName, using(T0 + 4 * SEC, { name: 'edit', target: null }));
+  assert.equal(noTarget.tool?.target, null);
+  const gone = reduceBuild(noTarget, using(T0 + 5 * SEC, null));
+  assert.equal(gone.tool, null);
+  assert.deepEqual(
+    { turnStartedAt: gone.turnStartedAt, turnFiles: gone.turnFiles, lastFile: gone.lastFile, turnSeen: gone.turnSeen, idleAt: gone.idleAt },
+    { turnStartedAt: T0, turnFiles: ['screens/home.html'], lastFile: { path: 'screens/home.html', at: T0 + SEC }, turnSeen: true, idleAt: null },
+  );
+});
+
+test('tool: the same call reported again returns the same track', () => {
+  const track = run(using(T0, READ_THEME));
+  assert.equal(reduceBuild(track, using(T0 + SEC, { ...READ_THEME })), track);
+  const bare = run(using(T0, null));
+  assert.equal(reduceBuild(bare, using(T0 + SEC, null)), bare);
+});
+
+test('tool: an unknown blip drops it but keeps the turn; the next running snapshot brings it back', () => {
+  const blip = run(using(T0, READ_THEME), sess(T0 + SEC, 'unknown'));
+  assert.equal(blip.activity, 'running');
+  assert.equal(blip.tool, null);
+  assert.equal(reduceBuild(blip, sess(T0 + 2 * SEC, 'unknown')), blip, 'a second unknown does not restart the hold');
+  const back = reduceBuild(blip, using(T0 + 3 * SEC, READ_THEME));
+  assert.deepEqual(back.tool, READ_THEME);
+  assert.equal(back.unknownSince, null);
+  assert.equal(back.turnStartedAt, T0);
+});
+
+test('tool: phaseOf and nextDeadline answer the same with and without it', () => {
+  const stories: ((tool: SessionTool | null) => BuildInput[])[] = [
+    (tool) => [using(T0, tool)],
+    (tool) => [using(T0, tool), files(T0 + SEC, ['index.html'])],
+    (tool) => [using(T0, tool), sess(T0 + SEC, 'unknown')],
+    (tool) => [using(T0, tool), feedIn(T0 + SEC, 'retrying')],
+  ];
+  for (const story of stories) {
+    const without = run(...story(null));
+    const withTool = run(...story(EDIT_PRICING));
+    for (const at of [T0 + 2 * SEC, T0 + 10 * SEC, T0 + 20 * SEC, T0 + 40 * SEC, T0 + QUIET_MS + SEC]) {
+      assert.equal(phaseOf(withTool, at), phaseOf(without, at));
+      assert.equal(nextDeadline(withTool, at), nextDeadline(without, at));
+    }
+  }
+});
+
+const calling = (tool: GuestSessionRecord['tool'], activity: GuestSessionRecord['activity'] = 'running'): GuestSessionRecord => ({ ...record('ses_a', activity), tool });
+
+test('wiring: the linked session\'s tool reaches the track, cleaned; other chats\' tools do not', async (t) => {
+  const r = rig(t);
+  await flush();
+  let heard = 0;
+  r.watcher.subscribe(() => (heard += 1));
+  r.host.emitSessions('proj_shop', [{ ...record('ses_other', 'running'), tool: { name: 'bash', target: null } }, calling({ name: 'read', target: ' src/theme\u0000.css\n' })]);
+  assert.deepEqual(r.watcher.get().tool, { name: 'read', target: 'src/theme.css' });
+  assert.equal(heard, 1);
+  r.host.emitSessions('proj_shop', [calling({ name: 'read', target: 'src/theme.css' })]);
+  assert.equal(heard, 1, 'the same call again notifies nobody');
+  r.host.emitSessions('proj_shop', [calling({ name: 'edit', target: 'src/theme.css' })]);
+  assert.equal(heard, 2);
+  assert.equal(r.watcher.get().tool?.name, 'edit');
+});
+
+test('wiring: a host without `tool`, a null one and a name the reader refuses all mean no tool', async (t) => {
+  const r = rig(t);
+  await flush();
+  for (const tool of [undefined, null, { name: 'not a tool name', target: 'a.css' }]) {
+    r.host.emitSessions('proj_shop', [calling({ name: 'read', target: 'a.css' })]);
+    assert.notEqual(r.watcher.get().tool, null);
+    r.host.emitSessions('proj_shop', [tool === undefined ? record('ses_a', 'running') : calling(tool)]);
+    assert.equal(r.watcher.get().tool, null, JSON.stringify(tool));
+    assert.equal(r.watcher.get().activity, 'running');
+  }
+});
+
+test('wiring: the tool goes when the chat is gone, the snapshot errors, or the design is unlinked', async (t) => {
+  const r = rig(t);
+  await flush();
+  const live = calling({ name: 'read', target: 'a.css' });
+  r.host.emitSessions('proj_shop', [live]);
+  r.host.emitSessions('proj_shop', [record('ses_other', 'idle')]);
+  assert.equal(r.watcher.get().tool, null, 'gone');
+  r.host.emitSessions('proj_shop', [live]);
+  r.host.setSession({ id: 'ses_a', title: 'Chat', busy: true });
+  r.host.emitSessions('proj_shop', [], 'error');
+  assert.equal(r.watcher.get().activity, 'running', 'the selected chat\'s busy flag stands in');
+  assert.equal(r.watcher.get().tool, null, 'error: the fallback knows no tool');
+  r.host.emitSessions('proj_shop', [live]);
+  assert.notEqual(r.watcher.get().tool, null);
+  r.setDetail(detailOf({ sessionId: null }));
+  assert.equal(r.watcher.get().tool, null, 'unlinked');
 });
