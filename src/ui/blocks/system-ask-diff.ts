@@ -17,11 +17,11 @@ import { icon } from '../components/icons.ts';
 import type { SystemAskBlock } from '../model/block-args.ts';
 import {
   LOADING_PROPOSAL,
-  SERVICE_DOWN,
   PART_LABELS,
   answeredView,
   approveAnswer,
   approveView,
+  askCopy,
   describeAnswer,
   describeOffered,
   diffTitle,
@@ -32,6 +32,7 @@ import {
   patchView,
   previewButtons,
   proposalStateSentence,
+  proposalVerdict,
   stopAnswer,
   systemName,
   undoWindow,
@@ -39,6 +40,7 @@ import {
   usesLine,
   type CurrentProposal,
 } from '../model/system-ask-model.ts';
+import type { AskPoll, PollVerdict } from '../model/ask-poll.ts';
 import type { BlockContext, BlockView } from './block-view.ts';
 import { cannotTake, frame, primaryOf, refusedLine, sendAnswer, startRefetch, uid } from './system-ask-shared.ts';
 
@@ -75,10 +77,11 @@ export const mountDiff = (root: HTMLElement, ctx: BlockContext, ask: Diff, set: 
   let footOwned: Disposable[] = [];
   let footEl: HTMLElement | null = null;
   let bodyEl: HTMLElement | null = null;
-  let stopRefetch: (() => void) | null = null;
+  let poll: AskPoll | null = null;
   let disposed = false;
 
   const title = (): string => systemName(name, ask.systemId);
+  const copy = (): ReturnType<typeof askCopy> => askCopy(ctx.device(), ctx.panelOnPhone);
   const current = (): CurrentProposal | null => (isCurrent(view) ? view : null);
 
   // ---------------------------------------------------------------- the footer
@@ -102,8 +105,7 @@ export const mountDiff = (root: HTMLElement, ctx: BlockContext, ask: Diff, set: 
       busy = false;
       if (outcome === 'sent') {
         answeredText = text;
-        stopRefetch?.();
-        stopRefetch = null;
+        poll?.stop();
         renderAll();
       } else if (outcome === 'host-rejected') {
         cannot = text;
@@ -135,8 +137,7 @@ export const mountDiff = (root: HTMLElement, ctx: BlockContext, ask: Diff, set: 
     const text = stopAnswer(ask.systemId, title(), proposal.proposal.id);
     const outcome = await sendAnswer(ctx, text);
     busy = false;
-    stopRefetch?.();
-    stopRefetch = null;
+    poll?.stop();
     if (outcome === 'sent') answeredText = text;
     else stoppedText = text;
     renderAll();
@@ -295,11 +296,11 @@ export const mountDiff = (root: HTMLElement, ctx: BlockContext, ask: Diff, set: 
           onClick: () => {
             ctx.openSystemPreview(ask.systemId, which).then(
               (outcome) => {
-                if (outcome === 'opened') ctx.toast('info', which === 'living-page-preview' ? 'The living page preview is open in the rail.' : 'The board is open in the rail.');
+                if (outcome === 'opened') ctx.toast('info', copy().previewOpened(which));
                 else if (outcome === 'gone') ctx.toast('error', 'This design system is no longer in your Designs folder.');
-                else ctx.toast('error', 'Open Design Chamber from the rail to see the preview.');
+                else ctx.toast('error', copy().previewNotHere);
               },
-              () => ctx.toast('error', 'Couldn’t open the preview. Open Design Chamber from the rail.'),
+              () => ctx.toast('error', copy().previewFailed),
             );
           },
         }),
@@ -387,7 +388,7 @@ export const mountDiff = (root: HTMLElement, ctx: BlockContext, ask: Diff, set: 
     if (answeredText !== null) answeredBody(f.body, answeredText);
     else if (stoppedText !== null) stoppedBody(f.body, stoppedText);
     else if (load === 'loading') loadingBody(f.body);
-    else if (load === 'down') f.body.append(banner('warning', SERVICE_DOWN, { label: 'Try again', onClick: () => void readProposal(true) }));
+    else if (load === 'down') f.body.append(banner('warning', copy().serviceDown, { label: 'Try again', onClick: retry }));
     else if (proposal) proposalBody(f.body, proposal);
     else if (view !== null) f.body.append(banner('info', proposalStateSentence(view) ?? ''));
     root.replaceChildren(f.el);
@@ -397,18 +398,23 @@ export const mountDiff = (root: HTMLElement, ctx: BlockContext, ask: Diff, set: 
 
   // ---------------------------------------------------------------- reads
 
-  const readProposal = async (retry = false): Promise<void> => {
-    if (answeredText !== null || stoppedText !== null || busy) return;
-    if (retry && load === 'down') {
+  const retry = (): void => {
+    if (load === 'down') {
       load = 'loading';
       renderAll();
     }
+    poll?.now();
+  };
+
+  const readProposal = async (): Promise<PollVerdict> => {
+    // Not read: an answer or a Stop is out, and a settled card stops the polling itself.
+    if (answeredText !== null || stoppedText !== null || busy) return 'again';
     try {
       const [next, detail] = await Promise.all([
         ctx.client.getProposal(ask.systemId, ask.proposalId),
         nameTried ? Promise.resolve(name) : ctx.client.call('GET /systems/:id', { params: { id: ask.systemId } }).then((system) => system.name, () => null),
       ]);
-      if (answeredText !== null || stoppedText !== null || busy || disposed) return;
+      if (answeredText !== null || stoppedText !== null || busy || disposed) return 'again';
       const key = JSON.stringify(next);
       const changedName = detail !== name;
       name = detail;
@@ -417,54 +423,53 @@ export const mountDiff = (root: HTMLElement, ctx: BlockContext, ask: Diff, set: 
         on = new Set(next.proposal.parts.map((part) => part.name));
         partsKnown = true;
       }
-      if (load === 'ready' && key === viewKey && !changedName) return;
+      const verdict = proposalVerdict(next);
+      if (load === 'ready' && key === viewKey && !changedName) return verdict;
       load = 'ready';
       view = next;
       viewKey = key;
       renderAll();
+      return verdict;
     } catch (error) {
       if (isServiceError(error, 'not-found')) {
         // The service answered: it has no such proposal (or system) any more. Never keep Approve live for it.
-        if (answeredText !== null || stoppedText !== null || busy || disposed) return;
+        if (answeredText !== null || stoppedText !== null || busy || disposed) return 'again';
         const gone: ProposalView = { state: 'unknown' };
         const goneKey = JSON.stringify(gone);
-        if (load === 'ready' && viewKey === goneKey) return;
+        if (load === 'ready' && viewKey === goneKey) return 'done';
         load = 'ready';
         view = gone;
         viewKey = goneKey;
         declining = false;
         stopError = null;
         renderAll();
-        return;
+        return 'done';
       }
       // A hiccup (the service not answering) while a proposal is on screen is not worth taking it away for.
-      if (load === 'ready' && view !== null) return;
+      if (load === 'ready' && view !== null) return 'later';
       if (!isServiceError(error)) console.warn('Design Chamber: reading the proposal failed', error);
-      if (load === 'down') return;
+      if (load === 'down') return 'later';
       load = 'down';
       renderAll();
+      return 'later';
     }
   };
 
   renderAll();
-  if (answered === null) {
-    void readProposal();
-    stopRefetch = startRefetch(() => readProposal(), SYSTEM_ASK_POLL_MS);
-  }
+  if (answered === null) poll = startRefetch(readProposal, SYSTEM_ASK_POLL_MS);
 
   return {
     update: (next) => {
       if (next === null || next === answeredText) return;
       answeredText = next;
       cannot = null;
-      stopRefetch?.();
-      stopRefetch = null;
+      poll?.stop();
       renderAll();
     },
     dispose: () => {
       disposed = true;
       clearUndoTimer();
-      stopRefetch?.();
+      poll?.stop();
       for (const handle of owned) handle.dispose();
       for (const handle of footOwned) handle.dispose();
       owned = [];

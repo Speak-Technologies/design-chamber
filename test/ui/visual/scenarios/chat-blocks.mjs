@@ -3,6 +3,8 @@
 // arguments, service down, Open and Comment, the rail not available) and DirectionPick (three
 // options, a missing and a no-Chrome option, a pick, the answer replayed, a note, no options, an
 // answer the host refuses, four options, the keyboard). Light and dark, at chat widths 360 and 640.
+// Then the phone (390 x 844): the card's Open that cannot open, DirectionPick, a SystemAsk that cannot reach the
+// service, and how often an unanswered SystemAsk asks once its ticket has expired or while the service is down.
 // `helpers` is what the other scenarios use: openPage, check, sleep.
 
 const CARD = (slug) => ({ name: 'DesignCard', args: { slug } });
@@ -17,6 +19,8 @@ export const run = async (helpers) => {
       await directionPick(helpers, width, theme);
     }
   }
+  for (const theme of ['dark', 'light']) await phone(helpers, theme);
+  await asking(helpers);
   await slowPreview(helpers);
   await themeSwitch(helpers);
 };
@@ -245,5 +249,99 @@ const themeSwitch = async ({ openPage, check }) => {
   const after = await p.guest('return getComputedStyle(doc.body).backgroundColor');
   check(before !== after && (await p.guest('return !!doc.querySelector(".dcb-card[data-state=ready] img")')), `${tag}: a theme switch repaints and keeps the card (${before} → ${after})`);
   await p.shot(tag);
+  await p.close();
+};
+
+const ROUND_ONE = { name: 'SystemAsk', args: { kind: 'interview-1', ticket: 'sb_abcdefghij12', systemId: '', proposalId: '', calls: '' } };
+const DOWN = { status: 500, body: { error: 'internal', message: 'The local service didn’t answer.' } };
+
+/** A picture with the toast in it (`shot` clears the toasts first). */
+const toastShot = async (helpers, p, name) => {
+  const { data } = await p.send('Page.captureScreenshot', { format: 'png' });
+  (await import('node:fs')).writeFileSync(`${helpers.outDir}/${name}.png`, Buffer.from(data, 'base64'));
+};
+
+const phone = async (helpers, theme) => {
+  const { openPage, check, checkSoon, PHONE } = helpers;
+  const base = `blocks-phone-390-${theme}`;
+  const open = (label, block, routes = null) => openPage({ ...PHONE, surface: 'block', theme, label: `${base}-${label}`, block, routes });
+  const toasts = (p) => p.host('JSON.stringify(window.__host.toasts.map((t) => t.message))');
+  console.log(base);
+
+  let p = await open('card', CARD('coffee-subscription'));
+  await p.waitFor('return !!doc.querySelector(".dcb-card[data-state=ready] .dcb-preview:is([data-state=ready],[data-state=note])")', 'the card');
+  check((await p.guest('return doc.documentElement.dataset.dcForm + " " + doc.documentElement.dataset.dcPointer')) === 'phone coarse', `${base}: the frame knows it is on a phone`);
+  const buttons = await p.guest('return [...doc.querySelectorAll(".dcb-actions button")].map((b) => ({ t: b.textContent.trim(), h: Math.round(b.getBoundingClientRect().height) }))');
+  check(buttons.map((b) => b.t).join() === 'Open,Comment' && buttons.every((b) => b.h >= 44), `${base}: Open and Comment, 44 px tall (${JSON.stringify(buttons)})`);
+  check(await fitsWidth(p), `${base}: nothing wider than the phone`);
+  await sized(p, check, base);
+  await p.shot(`${base}-1-card`);
+  await p.click('.dcb-actions button', { text: 'Open' });
+  await checkSoon(async () => (await p.host('window.__host.surfacesOpened.length')) === 1, `${base}: Open opens Design Chamber`);
+  await p.host('window.__host.openSurfaceFails = "UNSUPPORTED"');
+  await p.click('.dcb-actions button', { text: 'Open' });
+  await checkSoon(async () => (await toasts(p)).includes('Design Chamber can’t open here yet. Open it from the More menu in your chats list.'), `${base}: Open that cannot open points at the More menu`);
+  check(!(await toasts(p)).includes('rail'), `${base}: and never says "rail"`);
+  await toastShot(helpers, p, `${base}-2-card-not-here`);
+  await p.close();
+
+  p = await open('card-down', CARD('coffee-subscription'), { 'GET /designs/:slug': DOWN });
+  await p.waitFor('return !!doc.querySelector(".dcb-notice button")', 'the service-down notice');
+  check((await p.guest('return doc.querySelector(".dcb-notice-text")?.textContent')) === 'Design Chamber isn’t responding on your computer. Try again in a moment.', `${base}: a card says the service is on the computer`);
+  await p.shot(`${base}-3-card-down`);
+  await p.close();
+
+  p = await open('pick', THREE);
+  await p.waitFor('return doc.querySelectorAll(".dcb-tile .dcb-preview:is([data-state=ready],[data-state=note])").length === 3', 'the tile previews');
+  check(await fitsWidth(p), `${base}: DirectionPick fits the phone`);
+  await sized(p, check, `${base}-pick`);
+  await p.shot(`${base}-4-pick`);
+  await p.close();
+
+  p = await open('ask-down', ROUND_ONE, { 'GET /system-builds/:ticket': DOWN });
+  await p.waitFor('return !!doc.querySelector(".dcb-ask-banner")', 'the service-down banner');
+  const banner = await p.guest('return doc.querySelector(".dcb-ask-banner").textContent');
+  check(banner.includes('on your computer') && !banner.includes('rail'), `${base}: SystemAsk says the service is on the computer (${banner})`);
+  await p.shot(`${base}-5-ask-down`);
+  await p.close();
+};
+
+/** Review finding F4: an unanswered SystemAsk stops asking for a dead ticket, and asks less while the service is down. Takes about 40 s. */
+const asking = async ({ openPage, check, sleep }) => {
+  const tag = 'blocks-ask-polling';
+  console.log(tag);
+  // One page at a time: a tab behind another one is hidden, and a hidden frame never asks.
+  const at = (label, answer) => openPage({ width: 480, height: 700, surface: 'block', theme: 'dark', label: `${tag}-${label}`, block: ROUND_ONE, routes: { 'GET /system-builds/:ticket': answer } });
+  const hits = (p) => p.routeHits('GET /system-builds/:ticket');
+  const focus = (p) => p.guest('win.dispatchEvent(new win.Event("focus"))');
+  const seen = async (p) => check((await p.guest('return doc.visibilityState')) === 'visible', `${tag}: the frame is on screen`);
+
+  let p = await at('live', { status: 200, body: { state: 'waiting', project: null } });
+  await p.waitFor('return !!doc.querySelector(".dcb-q")', 'the form');
+  await seen(p);
+  await sleep(11_000);
+  check((await hits(p)) === 3, `${tag}: an open question is asked every 5 s (${await hits(p)} reads in 11 s)`);
+  await p.close();
+
+  p = await at('expired', { status: 200, body: { state: 'expired' } });
+  await p.waitFor('return doc.querySelector(".dcb-ask-banner")?.textContent.includes("expired")', 'the expired sentence');
+  await seen(p);
+  await sleep(11_000);
+  await focus(p);
+  await sleep(300);
+  check((await hits(p)) === 1, `${tag}: an expired ticket is read once and never again, focus included (${await hits(p)})`);
+  await p.shot(`${tag}-expired`);
+  await p.close();
+
+  p = await at('down', DOWN);
+  await p.waitFor('return !!doc.querySelector(".dcb-ask-banner button")', 'the service-down banner');
+  await seen(p);
+  await sleep(17_000);
+  check((await hits(p)) === 2, `${tag}: while the service is down the wait doubles (${await hits(p)} reads in 17 s, 4 at the usual pace)`);
+  // Try again reads at once, and an answer that works puts the form back.
+  await p.route('GET /system-builds/:ticket', { status: 200, body: { state: 'waiting', project: null } });
+  await p.click('.dcb-ask-banner button', { text: 'Try again' });
+  await p.waitFor('return !!doc.querySelector(".dcb-q")', 'the form after Try again', 3000);
+  check(true, `${tag}: Try again brings the form back`);
   await p.close();
 };

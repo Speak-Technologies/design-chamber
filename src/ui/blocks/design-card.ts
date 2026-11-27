@@ -7,8 +7,9 @@ import { mountBadge, mountButton, mountSpinner, type ButtonHandle, type Tone } f
 import { openInRail } from '../../guest/flows.ts';
 import type { OpenIntent } from '../../shared/api.ts';
 import { errorText, h } from '../components/dom.ts';
-import { cardView } from '../model/block-view-model.ts';
+import { cardView, commentOffered } from '../model/block-view-model.ts';
 import type { BadgeTone } from '../model/checks-model.ts';
+import { openHelp } from '../model/device-model.ts';
 import { readCard, type CardRead } from './block-data.ts';
 import { notice, type BlockContext, type BlockView } from './block-view.ts';
 import { mountPreview, type PreviewHandle } from './preview.ts';
@@ -35,11 +36,14 @@ export const mountDesignCard = (root: HTMLElement, ctx: BlockContext, slug: stri
 
   const showError = (paused: boolean): void => {
     clear();
+    const device = ctx.device();
+    // On a phone the service runs on the computer, and the sentence says so.
+    const down = device.form === 'phone' ? { text: openHelp(device, ctx.panelOnPhone).serviceDown } : { text: 'Design Chamber isn’t responding.', detail: 'It may still be starting.' };
     root.append(
       notice(
         paused
           ? { icon: 'alert', text: 'Design Chamber is paused.', detail: 'Turn it back on in Settings → Extensions, then try again.', action: { label: 'Try again', onClick: load } }
-          : { icon: 'alert', text: 'Design Chamber isn’t responding.', detail: 'It may still be starting.', action: { label: 'Try again', onClick: load } },
+          : { icon: 'alert', ...down, action: { label: 'Try again', onClick: load } },
       ),
     );
   };
@@ -80,7 +84,7 @@ export const mountDesignCard = (root: HTMLElement, ctx: BlockContext, slug: stri
     }
 
     const openSlot = h('span', { class: 'dcb-action' });
-    const commentSlot = h('span', { class: 'dcb-action' });
+    const commentSlot = commentOffered(ctx.device(), ctx.panelOnPhone) ? h('span', { class: 'dcb-action' }) : null;
     const article = h(
       'article',
       { class: 'dcb-block dcb-card', 'data-state': 'ready', 'aria-labelledby': titleId },
@@ -111,7 +115,7 @@ export const mountDesignCard = (root: HTMLElement, ctx: BlockContext, slug: stri
           showGone();
           return;
         }
-        if (outcome === 'not-here') ctx.toast('info', 'Open Design Chamber from the rail to see it.');
+        if (outcome === 'not-here') ctx.toast('info', openHelp(ctx.device(), ctx.panelOnPhone).notHere);
       } catch (error) {
         ctx.toast('error', `Couldn’t open the design. ${errorText(error)}`);
       } finally {
@@ -121,10 +125,10 @@ export const mountDesignCard = (root: HTMLElement, ctx: BlockContext, slug: stri
       }
     };
     buttons.open = mountButton(openSlot, { label: 'Open', variant: 'default', size: 'sm', onClick: () => void open('view') });
-    buttons.comment = mountButton(commentSlot, { label: 'Comment', variant: 'outline', size: 'sm', onClick: () => void open('comment') });
+    if (commentSlot) buttons.comment = mountButton(commentSlot, { label: 'Comment', variant: 'outline', size: 'sm', onClick: () => void open('comment') });
     openSlot.querySelector('button')?.setAttribute('data-emphasis', 'primary');
     openSlot.querySelector('button')?.setAttribute('aria-describedby', titleId);
-    commentSlot.querySelector('button')?.setAttribute('aria-describedby', titleId);
+    commentSlot?.querySelector('button')?.setAttribute('aria-describedby', titleId);
   };
 
   function load(): void {

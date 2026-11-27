@@ -1190,7 +1190,7 @@ export const mountSystemPage = (options: SystemPageOptions): SystemPageHandle =>
           btn({ label: control.label, variant: control.emphasis === 'primary' ? 'default' : 'outline', size: 'sm', ...(control.emphasis === 'primary' ? { emphasis: 'primary' as const } : {}), disabled: viewing !== null, onClick: () => void toggleReady() }).el,
           btn({ label: 'Continue in chat', variant: 'outline', size: 'sm', icon: 'chat', onClick: () => void openChat() }).el,
         ),
-        ...(detail.home.kind === 'repo' ? [] : [h('p', { class: 'dc-muted dc-syspg-railhint' }, railHint(detail))]),
+        ...(detail.home.kind === 'repo' ? [] : [h('p', { class: 'dc-muted dc-syspg-railhint' }, railHint(detail, document.documentElement.dataset.dcForm === 'phone'))]),
       );
     };
     if (foot.kind === 'uncovered') {

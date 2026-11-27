@@ -434,10 +434,12 @@ export const livingPagePill = (detail: Pick<SystemDetail, 'home' | 'livingPage'>
 };
 
 /** The line under the rail's buttons: where values are changed. Never an editor on the rail. */
-export const railHint = (detail: Pick<SystemDetail, 'home' | 'name'>): string =>
+export const railHint = (detail: Pick<SystemDetail, 'home' | 'name'>, phone = false): string =>
   detail.home.kind === 'repo'
     ? `${detail.name} lives in ${detail.home.label}. Change the values there, or ask the agent here.`
-    : 'To edit values, open Design Chamber full screen: sidebar, Extension pages, Design Chamber.';
+    : phone
+      ? 'To edit values, open Design Chamber on your computer.'
+      : 'To edit values, open Design Chamber full screen: sidebar, Extension pages, Design Chamber.';
 
 /**
  * The pointer over the board as the board's own variable (`BOARD_POINTER_VAR` in the board document): frame px, whole, "x y".

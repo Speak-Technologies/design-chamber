@@ -180,7 +180,8 @@ const rounds = async ({ openPage, check }, width, theme) => {
     await p.settle(POLL_WAIT);
     check(await p.guest('return !!doc.querySelector(".dcb-q") && [...doc.querySelectorAll(".dcb-opt-input:checked")].some((n) => n.value === "custom")'), `${base}: a failed read keeps the form and the pick`);
     await p.route('GET /systems/:id', SYSTEM_READ('done')['GET /systems/:id']);
-    await p.settle(POLL_WAIT);
+    // The failed read doubled the wait (the block asks less while the service is down), so this one takes longer.
+    await p.settle(POLL_WAIT * 2);
     check(!(await p.guest('return !!doc.querySelector(".dcb-q, .dcb-ask-foot button")')) && (await p.guest('return !!doc.querySelector(".dcb-ask-banner")')), `${base}: a read that finds the build done turns the card read-only`);
     await p.close();
   }

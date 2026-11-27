@@ -11,15 +11,16 @@ import type { SystemQuestion, SystemQuestionSet } from '../../shared/types.ts';
 import { isServiceError } from '../../guest/service-client.ts';
 import { h } from '../components/dom.ts';
 import { icon } from '../components/icons.ts';
+import type { AskPoll, PollVerdict } from '../model/ask-poll.ts';
 import type { SystemAskBlock } from '../model/block-args.ts';
 import {
   CUSTOM_LINE,
   NO_PROJECT_LINE,
   OUT_OF_DATE,
-  SERVICE_DOWN,
   SYSTEM_GONE,
   TICKET_EXPIRED,
   answeredView,
+  askCopy,
   defaultPicks,
   droppedLine,
   isCustom,
@@ -30,6 +31,8 @@ import {
   roundTwoAnswer,
   roundTwoRead,
   roundTwoSub,
+  roundTwoVerdict,
+  ticketVerdict,
   withPick,
   type Picks,
   type RoundTwoCall,
@@ -60,7 +63,7 @@ export const mountInterview = (root: HTMLElement, ctx: BlockContext, ask: Interv
   let cannot: string | null = null;
   let answeredText: string | null = answered;
   let owned: Array<{ dispose: () => void }> = [];
-  let stopRefetch: (() => void) | null = null;
+  let poll: AskPoll | null = null;
 
   // What paint() reaches into after each pick.
   let goHandle: ButtonHandle | null = null;
@@ -151,8 +154,7 @@ export const mountInterview = (root: HTMLElement, ctx: BlockContext, ask: Interv
       sending = false;
       if (outcome === 'sent') {
         if (answeredText === null) answeredText = text;
-        stopRefetch?.();
-        stopRefetch = null;
+        poll?.stop();
         render();
       } else if (outcome === 'host-rejected') {
         cannot = text;
@@ -239,7 +241,7 @@ export const mountInterview = (root: HTMLElement, ctx: BlockContext, ask: Interv
     const slot = h('div', { class: 'dcb-ask-banner' });
     body.append(slot);
     if (phase === 'down') {
-      own(mountBanner(slot, { tone: 'warning', title: SERVICE_DOWN, action: { label: 'Try again', onClick: () => void read() } }));
+      own(mountBanner(slot, { tone: 'warning', title: askCopy(ctx.device(), ctx.panelOnPhone).serviceDown, action: { label: 'Try again', onClick: () => poll?.now() } }));
     } else {
       own(mountBanner(slot, { tone: 'info', title: phase === 'expired' ? TICKET_EXPIRED : phase === 'gone' ? SYSTEM_GONE : OUT_OF_DATE }));
     }
@@ -263,72 +265,79 @@ export const mountInterview = (root: HTMLElement, ctx: BlockContext, ask: Interv
     paint();
   };
 
-  const readTicket = async (): Promise<void> => {
-    if (!roundOne || answeredText !== null || sending) return;
+  const readTicket = async (): Promise<PollVerdict> => {
+    // Not read: an answer is on its way, and a sent one stops the polling itself.
+    if (!roundOne || answeredText !== null || sending) return 'again';
     let next: Phase;
+    let verdict: PollVerdict = 'later';
     let project = hasProject;
     try {
       const answer = await ctx.client.call('GET /system-builds/:ticket', { params: { ticket: ask.ticket } });
       next = answer.state === 'waiting' ? 'form' : answer.state === 'made' ? 'stale' : 'expired';
+      verdict = ticketVerdict(answer.state);
       if (answer.state === 'waiting') project = answer.project !== null;
     } catch (error) {
       // A hiccup while the form is open is not worth losing the user's picks for.
-      if (phase === 'form') return;
+      if (phase === 'form') return 'later';
       next = 'down';
       if (!isServiceError(error)) console.warn('Design Chamber: reading the build ticket failed', error);
     }
-    if (disposed || answeredText !== null || sending || (next === phase && project === hasProject)) return;
+    // An answer sent while this read was out: keep asking until the send settles (it stops the polling).
+    if (disposed || answeredText !== null || sending) return 'again';
+    if (next === phase && project === hasProject) return verdict;
     phase = next;
     hasProject = project;
     render();
+    return verdict;
   };
 
   /** Round two: the system must be in round two for the card to be answerable (§8.12). */
-  const readSystem = async (): Promise<void> => {
-    if (roundOne || answeredText !== null || sending) return;
+  const readSystem = async (): Promise<PollVerdict> => {
+    if (roundOne || answeredText !== null || sending) return 'again';
     let next: Phase;
+    let verdict: PollVerdict = 'later';
     let name = systemNameNow;
     try {
       const detail = await ctx.client.call('GET /systems/:id', { params: { id: ask.systemId } });
       const result = roundTwoRead(detail);
       next = result.phase;
       name = result.name;
+      verdict = roundTwoVerdict(detail);
     } catch (error) {
       if (isServiceError(error, 'not-found')) {
         next = roundTwoRead(null).phase;
         name = null;
+        verdict = roundTwoVerdict(null);
       } else {
         // A hiccup while the form (or a settled sentence) is up is not worth losing the user's picks for.
-        if (phase !== 'loading' && phase !== 'down') return;
+        if (phase !== 'loading' && phase !== 'down') return 'later';
         next = 'down';
         if (!isServiceError(error)) console.warn('Design Chamber: reading the system failed', error);
       }
     }
-    if (disposed || answeredText !== null || sending || (next === phase && name === systemNameNow)) return;
+    if (disposed || answeredText !== null || sending) return 'again';
+    if (next === phase && name === systemNameNow) return verdict;
     phase = next;
     systemNameNow = name;
     render();
+    return verdict;
   };
 
-  const read = (): Promise<void> => (roundOne ? readTicket() : readSystem());
+  const read = (): Promise<PollVerdict> => (roundOne ? readTicket() : readSystem());
 
   render();
-  if (answeredText === null) {
-    void read();
-    stopRefetch = startRefetch(read, SYSTEM_ASK_POLL_MS);
-  }
+  if (answeredText === null) poll = startRefetch(read, SYSTEM_ASK_POLL_MS);
 
   return {
     update: (next) => {
       if (next === null || next === answeredText) return;
       answeredText = next;
-      stopRefetch?.();
-      stopRefetch = null;
+      poll?.stop();
       render();
     },
     dispose: () => {
       disposed = true;
-      stopRefetch?.();
+      poll?.stop();
       for (const handle of owned) handle.dispose();
       owned = [];
       root.replaceChildren();

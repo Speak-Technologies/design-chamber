@@ -10,7 +10,9 @@ import { applyHostReady, mountSpinner } from '@openchamber/sdk/ui';
 import { getGuestHost } from '../../guest/host.ts';
 import { openSystemInRail } from '../../guest/flows.ts';
 import { createServiceClient } from '../../guest/service-client.ts';
+import { applyDevice } from '../components/device.ts';
 import { parseBlockArgs } from '../model/block-args.ts';
+import { DESKTOP_DEVICE, deviceOf } from '../model/device-model.ts';
 import { notice, type BlockContext, type BlockView } from './block-view.ts';
 import { mountDesignCard } from './design-card.ts';
 import { mountDirectionPick } from './direction-pick.ts';
@@ -22,6 +24,7 @@ const blockRoot: HTMLElement = root;
 
 const guestHost = getGuestHost();
 const serviceClient = createServiceClient(guestHost.client);
+let device = DESKTOP_DEVICE;
 const ctx: BlockContext = {
   client: serviceClient,
   host: guestHost.client,
@@ -29,6 +32,8 @@ const ctx: BlockContext = {
     guestHost.client.toast({ kind, message, dismiss: kind === 'error' }).catch((error: unknown) => console.warn('Design Chamber: toast failed', error));
   },
   openSystemPreview: (systemId, which) => openSystemInRail({ client: serviceClient, host: guestHost.client }, systemId, which === 'living-page-preview' ? 'preview' : 'board'),
+  device: () => device,
+  panelOnPhone: __DC_PANEL_MOBILE__,
 };
 
 // The kit's stylesheet comes in with the first kit mount; do it before the first paint.
@@ -37,6 +42,8 @@ mountSpinner(document.createElement('div')).dispose();
 guestHost.ready.subscribe((context) => {
   if (!context) return;
   applyHostReady(context, document.documentElement);
+  device = deviceOf(context);
+  applyDevice(device, document.documentElement);
   document.documentElement.lang = context.locale;
 });
 

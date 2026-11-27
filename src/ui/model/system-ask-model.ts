@@ -11,7 +11,9 @@ import { GUEST_BLOCK_ANSWER_MAX } from '@openchamber/sdk';
 
 import { SYSTEM_ASK_CALLS_MAX } from '../../shared/limits.ts';
 import type { ProposalFile, ProposalPart, ProposalPartName, ProposalView, SystemQuestion, SystemQuestionSet } from '../../shared/types.ts';
+import type { PollVerdict } from './ask-poll.ts';
 import { clipText, type SystemAskCall } from './block-args.ts';
+import { openHelp, type Device } from './device-model.ts';
 
 // ---------------------------------------------------------------- picks
 
@@ -170,6 +172,16 @@ export const roundTwoAnswer = (systemId: string, calls: readonly RoundTwoCall[],
   return composeAnswer(`Round two: ${parts.join('; ')}.`, markerLine(fields), note);
 };
 
+/** A round-two card whose build is finished, or whose system is gone, has nothing left to wait for. */
+export const roundTwoVerdict = (detail: { build: { round: 1 | 2 | 'done' } | null } | null): PollVerdict => {
+  if (detail === null || detail.build?.round === 'done') return 'done';
+  // Round one, or no record yet, can still turn into this card's round: ask, but less often.
+  return detail.build?.round === 2 ? 'again' : 'later';
+};
+
+/** A round-one card: a ticket that expired or made its system never changes again. */
+export const ticketVerdict = (state: 'waiting' | 'made' | 'expired'): PollVerdict => (state === 'waiting' ? 'again' : 'done');
+
 // ---------------------------------------------------------------- the diff
 
 export const PART_LABELS: Record<ProposalPartName, string> = {
@@ -204,6 +216,10 @@ export const proposalStateSentence = (view: ProposalView): string | null => {
       return view.sentence;
   }
 };
+
+/** A proposal that was answered, replaced or can't be found is final; the others can still change under the card. */
+export const proposalVerdict = (view: ProposalView): PollVerdict =>
+  view.state === 'approved' || view.state === 'declined' || view.state === 'superseded' || view.state === 'unknown' ? 'done' : 'again';
 
 export const partCountText = (part: ProposalPart): string => `${part.files.length} ${part.files.length === 1 ? 'file' : 'files'}`;
 
@@ -420,3 +436,23 @@ export const HOST_CANNOT_TAKE = 'Reply in the chat to answer.';
 export const SYSTEM_GONE = 'This design system is no longer in your Designs folder. Reply in the chat if the agent still needs something.';
 export const OUT_OF_DATE = 'This question is out of date. Reply in the chat if the agent still needs something.';
 export const TICKET_EXPIRED = 'This build has expired. Run /design-system again to start over.';
+
+/** The sentences of the block that name where Design Chamber is, which differs on a phone (no rail there). */
+export type AskCopy = {
+  serviceDown: string;
+  previewOpened: (which: 'living-page-preview' | 'board-preview') => string;
+  previewNotHere: string;
+  previewFailed: string;
+};
+
+export const askCopy = (device: Device, panelOnPhone: boolean): AskCopy => {
+  const phone = device.form === 'phone';
+  const help = openHelp(device, panelOnPhone);
+  const where = phone ? 'Design Chamber' : 'the rail';
+  return {
+    serviceDown: phone ? help.serviceDown : SERVICE_DOWN,
+    previewOpened: (which) => (which === 'living-page-preview' ? `The living page preview is open in ${where}.` : `The board is open in ${where}.`),
+    previewNotHere: phone ? help.notHere : 'Open Design Chamber from the rail to see the preview.',
+    previewFailed: phone ? `Couldn’t open the preview. ${help.notHere}` : 'Couldn’t open the preview. Open Design Chamber from the rail.',
+  };
+};

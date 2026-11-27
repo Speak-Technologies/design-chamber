@@ -8,9 +8,14 @@ import type { ChecksRenderState, ChecksSummary, StatusDesignRow, StatusDesignsRe
 import { STATUS_STARTING_GIVE_UP_MS } from '../../src/shared/limits.ts';
 import { pillText } from '../../src/ui/model/build-strip-model.ts';
 import { badgeOf } from '../../src/ui/model/checks-model.ts';
+import { DESKTOP_DEVICE, openHelp, type Device } from '../../src/ui/model/device-model.ts';
 import {
   STATUS_COPY,
+  holdTools,
   projectDirectoryOf,
+  projectOf,
+  toolsOf,
+  type SessionTools,
   statusRowView,
   shouldRefetchStatus,
   statusSectionOf,
@@ -321,4 +326,106 @@ test('project: no folder at all, or an empty project list, is not a project', ()
 test('project: when the project list could not be read, the folder counts as a project, as before', () => {
   assert.equal(projectDirectoryOf('/home/sam/work', null), '/home/sam/work');
   assert.equal(projectDirectoryOf(null, null), null);
+});
+
+// ---- what the agent is doing (native-extras §1.2) ----
+
+const toolsFor = (name: string, target: string | null, id = 'ses_a'): SessionTools => new Map([[id, { name, target }]]);
+const agentText = (over: Partial<StatusDesignRow>, tools: SessionTools): string | undefined => statusRowView(row(over), { checking: false, tools }).parts[0]?.text;
+
+test('a tool of the row’s chat takes the agent part while it writes or works, in the strip’s short words', () => {
+  for (const agent of ['working', 'writing'] as const) {
+    const over = { agent, sessionId: 'ses_a', lastFile: 'home.html' };
+    assert.equal(agentText(over, toolsFor('edit', 'screens/pricing.html')), 'Editing pricing.html');
+    assert.equal(agentText(over, toolsFor('read', 'src/styles/theme.css')), 'Reading theme.css');
+    assert.equal(agentText(over, toolsFor('bash', 'secret.sh')), 'Running a command');
+    assert.equal(agentText(over, toolsFor('design_check', null)), 'Checking');
+  }
+  const view = statusRowView(row({ agent: 'working', sessionId: 'ses_a', checks: summary('fresh') }), { checking: false, tools: toolsFor('edit', 'pricing.html') });
+  assert.equal(view.meta, `Editing pricing.html · ${badgeOf(summary('fresh'), null, false).label}`);
+  assert.equal(view.tone, 'info');
+});
+
+test('another chat’s tool, an unlinked row, an unknown tool or no tools keep today’s words', () => {
+  const working = { agent: 'working' as const, sessionId: 'ses_a' };
+  assert.equal(agentText(working, toolsFor('edit', 'a.html', 'ses_b')), 'Agent is working');
+  assert.equal(agentText({ agent: 'working', sessionId: null }, toolsFor('edit', 'a.html')), 'Agent is working');
+  assert.equal(agentText(working, toolsFor('some_new_tool', 'a.html')), 'Agent is working');
+  assert.equal(agentText(working, new Map()), 'Agent is working');
+  assert.equal(agentText({ agent: 'writing', sessionId: 'ses_a', lastFile: 'home.html' }, new Map()), 'Writing home.html');
+});
+
+test('a finished, failed or waiting row ignores the tool', () => {
+  const tools = toolsFor('edit', 'a.html');
+  assert.equal(agentText({ agent: 'failed', sessionId: 'ses_a' }, tools), 'Agent stopped');
+  assert.equal(agentText({ agent: null, sessionId: 'ses_a' }, tools), undefined);
+  assert.equal(agentText({ pending: true, sessionId: 'ses_a' }, tools), STATUS_COPY.waiting);
+});
+
+test('the section passes the tools to the row of that chat only', () => {
+  const view = statusSectionOf({
+    data: { rows: [row({ slug: 'a', agent: 'working', sessionId: 'ses_a' }), row({ slug: 'b', agent: 'working', sessionId: 'ses_b' })], total: 2 },
+    error: null,
+    failingMs: 0,
+    hasProject: true,
+    checking: new Set(),
+    tools: toolsFor('write', 'b.html', 'ses_b'),
+  });
+  assert.deepEqual(view.rows.map((entry) => entry.meta), ['Agent is working', 'Writing b.html']);
+});
+
+test('only a running chat has a tool, and a malformed one is dropped', () => {
+  const tool = { name: 'edit', target: 'a.html' };
+  const tools = toolsOf([
+    { id: 'run', activity: 'running', tool },
+    { id: 'idle', activity: 'idle', tool },
+    { id: 'ask', activity: 'waiting-question', tool },
+    { id: 'old', activity: 'running' },
+    { id: 'bad', activity: 'running', tool: { name: 'rm -rf /', target: 'x' } },
+  ]);
+  assert.deepEqual([...tools], [['run', tool]]);
+});
+
+test('the tools on screen change at most once a second', () => {
+  const first = holdTools(null, toolsFor('read', 'a.css'), 1000);
+  assert.equal(first.wait, null);
+  const held = holdTools(first.held, toolsFor('read', 'b.css'), 1400);
+  assert.equal(held.wait, 600);
+  assert.equal(held.held.tools.get('ses_a')?.target, 'a.css');
+  const same = holdTools(first.held, toolsFor('read', 'a.css'), 1400);
+  assert.equal(same.wait, null);
+  const shown = holdTools(held.held, toolsFor('read', 'b.css'), 2000);
+  assert.equal(shown.wait, null);
+  assert.equal(shown.held.tools.get('ses_a')?.target, 'b.css');
+  assert.equal(holdTools(first.held, new Map(), 500).wait, null); // a clock stepped back never holds
+});
+
+test('the project is the registered one the folder is, with the id its sessions are read by', () => {
+  const projects = [{ id: 'p1', directory: 'C:\\code\\shop' }];
+  assert.equal(projectOf('c:/code/shop/', projects)?.id, 'p1');
+  assert.equal(projectOf('/elsewhere', projects), null);
+  assert.equal(projectOf(null, projects), null);
+  assert.equal(projectOf('c:/code/shop', null), null);
+});
+
+// ---- phone copy (native-extras §2.2, review finding F5) ----
+
+const PHONE: Device = { form: 'phone', coarse: true, insets: { top: 0, right: 0, bottom: 34, left: 0 }, keyboard: 0 };
+
+test('a desktop keeps its words; a phone never says "rail"', () => {
+  assert.equal(openHelp(DESKTOP_DEVICE, true).notHere, STATUS_COPY.notHere);
+  assert.equal(openHelp(DESKTOP_DEVICE, true).serviceDown, STATUS_COPY.unresponsive);
+  for (const panel of [true, false]) assert.doesNotMatch(openHelp(PHONE, panel).notHere, /rail/);
+});
+
+test('a phone says the service runs on the computer when it isn’t responding', () => {
+  const view = statusSectionOf({
+    data: null,
+    error: { code: 'NO_SERVICE', message: 'x' },
+    failingMs: STATUS_STARTING_GIVE_UP_MS,
+    hasProject: true,
+    checking: new Set(),
+    serviceDown: openHelp(PHONE, true).serviceDown,
+  });
+  assert.equal(view.notice?.text, 'Design Chamber isn’t responding on your computer. Try again in a moment.');
 });

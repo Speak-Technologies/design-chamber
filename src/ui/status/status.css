@@ -218,6 +218,29 @@ body {
   min-height: calc(var(--ws-s3) * 3 + var(--ws-s2));
 }
 
+/* The taller buttons make the row taller than its words: keep the name and its line together, in the middle. */
+[data-dc-pointer='coarse'] .ws-title {
+  align-self: center;
+}
+
+@container (min-width: 341px) {
+  [data-dc-pointer='coarse'] .ws-title,
+  [data-dc-pointer='coarse'] .ws-dot {
+    align-self: end;
+  }
+  [data-dc-pointer='coarse'] .ws-dot {
+    margin-bottom: calc((1.4em - 8px) / 2);
+  }
+  [data-dc-pointer='coarse'] .ws-meta {
+    align-self: start;
+  }
+  [data-dc-pointer='coarse'] .ws-row:has(.ws-meta[hidden]) :is(.ws-title, .ws-dot) {
+    grid-row: 1 / span 2;
+    align-self: center;
+    margin-bottom: 0;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .ws-row[data-tone='info'] .ws-dot {
     animation: none;
