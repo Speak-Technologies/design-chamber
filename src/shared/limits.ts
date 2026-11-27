@@ -591,7 +591,7 @@ export const LIVING_PAGE_MAX_BYTES = 20 * 1024 * 1024;
 /** One font or logo embedded into the living page. */
 export const LIVING_PAGE_ASSET_MAX_BYTES = 4 * 1024 * 1024;
 export const LIVING_PAGE_OMITTED_MAX = 50;
-/** rev 3: PNG examples (S8's 1 is superseded); rev 4 (value 3): markdown bodies; value 4: board layout runs and tables, the 90ch measure; value 5: pattern and brand examples, colour pairs; value 6: motion specimens, the tinted icon grid. */
+/** rev 3: PNG examples (S8's 1 is superseded); rev 4 (value 3): markdown bodies; value 4: board layout runs and tables, the 90ch measure; value 5: pattern and brand examples, colour pairs; value 6: motion specimens, the tinted icon grid, screen pictures. */
 export const LIVING_PAGE_GENERATOR_VERSION = 6;
 /**
  * The example pictures' own generator: their inputs (example HTML, tokens, fonts) did not change with

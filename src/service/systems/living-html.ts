@@ -14,7 +14,7 @@
 
 import { LIVING_PAGE_MARK_NAME, SYSTEM_ENTRY_ID_PATTERN, SYSTEM_TOKEN_NAME_PATTERN } from '../../shared/limits.ts';
 import { darkVarOf, typeVarOf } from '../../shared/system-board.ts';
-import { AREA_OF_SECTION, SYSTEM_AREAS, SYSTEM_SECTIONS } from '../../shared/system-json.ts';
+import { AREA_OF_SECTION, screenAreaOf, SYSTEM_AREAS, SYSTEM_SECTIONS } from '../../shared/system-json.ts';
 import type { SystemArea, SystemDetail, SystemSection } from '../../shared/types.ts';
 import { LIVING_VIEWPORT, livingCssProblems } from './living-safe.ts';
 import { markdownCss } from './markdown-html.ts';
@@ -231,6 +231,10 @@ ${CURRENT_COLOR_CSS}
 .lp-example { margin: 0; }
 .lp-example img { display: block; max-width: 100%; height: auto; border: 1px solid #d8d8dc; border-radius: 6px; background: #ffffff; }
 .lp-example figcaption { font-size: 11px; color: #62626a; margin-top: 2px; }
+.lp-screens { display: grid; gap: 24px; }
+.lp-screen h4 { margin: 0 0 8px; font-size: 15px; font-weight: 600; }
+.lp-screen-shots { display: flex; flex-wrap: wrap; gap: 16px; align-items: flex-start; }
+.lp-screen-shots > .lp-example { max-width: 100%; min-width: 0; }
 .lp-footer { margin-top: 48px; padding-top: 16px; border-top: 1px solid #d8d8dc; color: #62626a; font-size: 13px; }
 .lp-footer p { margin: 0 0 4px; }
 .lp-footer ul { margin: 4px 0 0; padding-left: 18px; }`;
@@ -379,6 +383,40 @@ const exampleFigures =
     return (figures.length > 0 ? `<div class="lp-examples">${figures.join('')}</div>` : '') + missing.map((sentence) => `<p class="dc-muted">${escapeHtml(sentence)}</p>`).join('');
   };
 
+/** A screen picture's key among the page's pictures; `screen:` is never part of a component id. */
+export const screenShotKey = (screen: string, viewport: string): string => `screen:${screen}@${viewport}`;
+
+/** The sentence for a screen with no picture (the board's words for an example), and why when it isn't the screen's doing. */
+export const SCREEN_NOT_SHOWN_SENTENCE = "This example couldn't be shown.";
+
+const PICTURE = /^[A-Za-z0-9+/]+={0,2}$/;
+
+/**
+ * The screens of one area (system-builder-depth T14): each with its title and a picture per viewport,
+ * labelled with the viewport and its size. A picture only: nothing of the screen's markup is written.
+ */
+const screenPictures = (detail: SystemDetail, area: 'patterns' | 'brand', examples: Readonly<Record<string, readonly LivingExampleShot[]>>): string => {
+  const screens = detail.screens.filter((screen) => screenAreaOf(screen.kind) === area);
+  if (screens.length === 0) return '';
+  const cards = screens.map((screen) => {
+    const figures = (screen.viewports ?? detail.viewports).map((viewport) => {
+      const key = screenShotKey(screen.id, viewport.id);
+      const shot = Object.hasOwn(examples, key) ? examples[key]?.[0] : undefined;
+      const png = shot?.png ?? null;
+      const reason = shot?.reason ?? 'render-failed';
+      const picture =
+        png !== null && PICTURE.test(png.base64) && Number.isInteger(png.width) && Number.isInteger(png.height)
+          ? `<img src="data:image/png;base64,${png.base64}" alt="${escapeHtml(`${screen.title}, ${viewport.label}`)}" width="${png.width}" height="${png.height}">`
+          : `<p class="dc-muted">${escapeHtml(reason === 'render-failed' ? SCREEN_NOT_SHOWN_SENTENCE : `${SCREEN_NOT_SHOWN_SENTENCE} ${EXAMPLE_REASON_SENTENCES[reason]}`)}</p>`;
+      return `<figure class="lp-example">${picture}<figcaption>${escapeHtml(`${viewport.label} · ${viewport.width} × ${viewport.height}`)}</figcaption></figure>`;
+    });
+    // The mark is dropped from the page; it names the screen for a secret-shape hit in its text.
+    const mark = SYSTEM_ENTRY_ID_PATTERN.test(screen.id) ? ` data-dc-entry="screen:${screen.id}"` : '';
+    return `<article class="lp-screen"${mark}><h4>${escapeHtml(screen.title)}</h4><div class="lp-screen-shots">${figures.join('')}</div></article>`;
+  });
+  return `<h3>Screens</h3><div class="lp-screens">${cards.join('')}</div>`;
+};
+
 const PREVIEW_CSS = '.lp-preview { margin: 0; padding: 10px 24px; background: #fdf3d7; color: #4a3b0b; border-bottom: 1px solid #e6d29a; font: 600 14px/1.4 system-ui, sans-serif; }';
 
 /** The preview's top band (§5.11 rev 3). */
@@ -410,7 +448,7 @@ export const buildLivingPage = (detail: SystemDetail, input: LivingPageInput): L
   // The body, with the board's entry marks, then the marks turned into ranges.
   const areas: string[] = [];
   for (const { area, sections } of AREA_SECTIONS) {
-    const rendered = sections.map((section) => renderSpecimenSection(shown, section, { unusable, tinted: input.tinted ?? new Set<string>(), still: true, styleClass, markdown: 'living', example: exampleFigures(input.examples ?? {}) })).join('\n');
+    const rendered = sections.map((section) => renderSpecimenSection(shown, section, { unusable, tinted: input.tinted ?? new Set<string>(), still: true, styleClass, markdown: 'living', example: exampleFigures(input.examples ?? {}), screens: (area) => screenPictures(shown, area, input.examples ?? {}) })).join('\n');
     areas.push(`<div class="lp-area" id="lp-area-${area}" role="group" aria-label="${escapeHtml(AREA_TITLES[area])}"><p class="lp-area-title" aria-hidden="true">${escapeHtml(AREA_TITLES[area])}</p>\n${rendered}\n</div>`);
   }
   const { text: body, marks } = stripEntryMarks(redact(areas.join('\n')));

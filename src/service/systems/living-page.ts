@@ -39,7 +39,7 @@ import { detailSourceFromTree, overlaySource } from './board.ts';
 import { listFiles, proposalDirOf, readProposalFile } from './proposal-record.ts';
 import { renderExamplePngs, type ExampleShot } from './living-examples.ts';
 import { ICON_DRAWN_MAX_BYTES, iconCopies, paintsOnlyCurrentColor } from './specimen-html.ts';
-import { buildLivingPage, LIVING_ENTRY_FILE, livingSchemes, type ExampleReason, type LivingExampleShot, type LivingPageDocument, type LivingPageInput, entryAt } from './living-html.ts';
+import { buildLivingPage, LIVING_ENTRY_FILE, livingSchemes, screenShotKey, type ExampleReason, type LivingExampleShot, type LivingPageDocument, type LivingPageInput, entryAt } from './living-html.ts';
 import { LIVING_PAGE_SCAN_MAX_BYTES, LIVING_PAGE_TOO_LARGE_REASON, normaliseForHash, scanLivingPage } from './living-safe.ts';
 import { ensureSystemStore, guardSystemWrite } from './store.ts';
 
@@ -171,13 +171,13 @@ export const fontsInTypeOrder = (detail: SystemDetail): SystemDetail['fonts'] =>
 /** The length `dataUrlOf` gives `bytes` bytes as base64, with its `data:<mime>;base64,` prefix (≤ 40 characters). */
 const encodedSize = (bytes: number): number => 40 + 4 * Math.ceil(bytes / 3);
 
-/** An example shot as the page takes it: base64 and CSS pixels (the PNG is drawn at `LIVING_EXAMPLE_SCALE`). */
+/** A shot as the page takes it: base64 and CSS pixels (an example's PNG is drawn at `LIVING_EXAMPLE_SCALE`, a screen's at 1). */
 export const toLivingShot = (shot: ExampleShot): LivingExampleShot =>
   shot.png === null || shot.width === 0 || shot.height === 0
     ? { scheme: shot.scheme, png: null, reason: shot.reason ?? 'render-failed' }
     : {
         scheme: shot.scheme,
-        png: { base64: Buffer.from(shot.png).toString('base64'), width: Math.ceil(shot.width / LIVING_EXAMPLE_SCALE), height: Math.ceil(shot.height / LIVING_EXAMPLE_SCALE) },
+        png: { base64: Buffer.from(shot.png).toString('base64'), width: Math.ceil(shot.width / (shot.scale ?? LIVING_EXAMPLE_SCALE)), height: Math.ceil(shot.height / (shot.scale ?? LIVING_EXAMPLE_SCALE)) },
         reason: null,
       };
 
@@ -414,13 +414,15 @@ const generate = async (
   const examples: Record<string, LivingExampleShot[]> = {};
   for (const shot of shots) (examples[shot.component] ??= []).push(toLivingShot(shot));
 
-  // An example key is a component's id, or `pattern:<id>` / `brand:<id>` (exampleKeyOf).
+  // An example key is a component's id, or `pattern:<id>` / `brand:<id>` (exampleKeyOf); a screen's is `screenShotKey`.
+  const screenNames = new Map(detail.screens.flatMap((screen) => (screen.viewports ?? detail.viewports).map((viewport) => [screenShotKey(screen.id, viewport.id), `${screen.title} (${viewport.label})`])));
   const nameOf = (key: string): string =>
-    key.startsWith('pattern:')
+    screenNames.get(key) ??
+    (key.startsWith('pattern:')
       ? (detail.patterns.find((entry) => `pattern:${entry.id}` === key)?.title ?? key)
       : key.startsWith('brand:')
         ? (detail.brand.find((entry) => `brand:${entry.id}` === key)?.title ?? key)
-        : (detail.components.find((candidate) => candidate.id === key)?.name ?? key);
+        : (detail.components.find((candidate) => candidate.id === key)?.name ?? key));
   const exampleOmissions = (): void => {
     for (const [component, list] of Object.entries(examples)) {
       for (const shot of list) if (shot.png === null) pushOmitted(omitted, { what: 'example', name: nameOf(component), reason: shot.reason ?? 'render-failed' });

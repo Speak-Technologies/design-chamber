@@ -1,5 +1,6 @@
 // Phase 2.5 (documentation/specs/phase-2-5-technical.md §5.11 `renderExamplePngs`, AD-31): component
-// examples as PNG pictures for the living page.
+// examples as PNG pictures for the living page, and (system-builder-depth T14) each system screen as a
+// picture per viewport.
 //
 // Each example is bundled on its own (relative to `components/`, export mode, so no bridge), wrapped in
 // a fixed shell that carries the system's tokens.css and its fonts, and drawn by headless Chrome over
@@ -26,9 +27,13 @@ import {
   SYSTEM_COMPONENTS_MAX,
   SYSTEM_ENTRY_ID_PATTERN,
   SYSTEM_PATTERNS_MAX,
+  SYSTEM_SCREEN_MAX,
+  SYSTEM_SCREENS_MAX,
+  VIEWPORTS_MAX,
 } from '../../shared/limits.ts';
-import type { SystemDetail } from '../../shared/types.ts';
-import { BundleMissingEntry, BundleTooLarge, bundleDocument, dataUrlOf, type FileSource } from '../bundle.ts';
+import { systemScreenFileOf } from '../../shared/system-json.ts';
+import type { SystemDetail, Viewport } from '../../shared/types.ts';
+import { BundleMissingEntry, BundleTooLarge, bundleDocument, dataUrlOf, RefBlocked, type FileSource } from '../bundle.ts';
 import { CdpError, CdpUnavailable, checkBrowserArgs, DEFAULT_LAUNCH_BUDGET_MS, launchOpenOptions, openCdp, type CdpSession, type OpenBrowserOptions } from '../check/cdp.ts';
 import { CHECK_CSP, DOCUMENT_ORIGIN } from '../check/render.ts';
 import { resolveBrowser } from '../chrome.ts';
@@ -36,17 +41,22 @@ import type { ServiceContext } from '../context.ts';
 import { resolveInside, writeFileAtomic } from '../paths.ts';
 import { pngSize, removeStaleWorkDirs, thumbWorkParent } from '../thumbnails.ts';
 import { checkAsset } from './assets.ts';
-import type { ExampleReason } from './living-html.ts';
+import { overlaySource } from './board-assemble.ts';
+import { screenShotKey, type ExampleReason } from './living-html.ts';
 import { exampleFileOf, exampleKeyOf, type ExampleKind } from './specimen-html.ts';
 import { guardSystemWrite } from './store.ts';
 
 export type { ExampleReason };
 
 /**
- * One example picture; `width`/`height` are the PNG's own pixels (0 when there is none). `component` is
- * the example key (`exampleKeyOf`): a component's id, or `pattern:<id>` / `brand:<id>`.
+ * One picture; `width`/`height` are the PNG's own pixels (0 when there is none). `component` is the
+ * example key (`exampleKeyOf`: a component's id, or `pattern:<id>` / `brand:<id>`) or a screen's key
+ * (`screenShotKey`). `scale` is the device scale it was drawn at; absent = `LIVING_EXAMPLE_SCALE`.
  */
-export type ExampleShot = { component: string; scheme: 'light' | 'dark'; png: Uint8Array | null; width: number; height: number; reason: ExampleReason | null };
+export type ExampleShot = { component: string; scheme: 'light' | 'dark'; png: Uint8Array | null; width: number; height: number; reason: ExampleReason | null; scale?: number };
+
+/** A screen is drawn at its viewport's size and this scale: a 1280 px screen at 2× would pass the picture cap. */
+export const LIVING_SCREEN_SCALE = 1;
 
 /** Examples a living page pictures at most: every component, pattern and brand entry. */
 export const LIVING_EXAMPLES_MAX = SYSTEM_COMPONENTS_MAX + SYSTEM_PATTERNS_MAX + SYSTEM_BRAND_MAX;
@@ -94,12 +104,17 @@ export const exampleShellHtml = (exampleHtml: string, shell: { tokensCss: string
   return `<!doctype html><html><head>${block}</head><body>${exampleHtml}</body></html>`;
 };
 
-export type PlannedShot = { component: string; scheme: 'light' | 'dark'; key: string; html: string };
+/** `size`: a screen's viewport, drawn at exactly that size and `LIVING_SCREEN_SCALE`; absent for an example. */
+export type PlannedShot = { component: string; scheme: 'light' | 'dark'; key: string; html: string; size?: { width: number; height: number } };
 
 /** The cache key (§5.11 step 2): every input of the picture, each length-prefixed so no two inputs run together. */
-export const exampleCacheKey = (input: { exampleHtml: string; tokensCss: string; fontsCss: string; scheme: 'light' | 'dark' }): string => {
+export const exampleCacheKey = (input: { exampleHtml: string; tokensCss: string; fontsCss: string; scheme: 'light' | 'dark'; size?: PlannedShot['size'] }): string => {
   const hash = createHash('sha256');
-  for (const part of [input.exampleHtml, input.tokensCss, input.fontsCss, input.scheme, String(LIVING_EXAMPLE_WIDTH), String(LIVING_EXAMPLE_SCALE), String(LIVING_EXAMPLE_GENERATOR_VERSION)]) {
+  const width = input.size?.width ?? LIVING_EXAMPLE_WIDTH;
+  const scale = input.size === undefined ? LIVING_EXAMPLE_SCALE : LIVING_SCREEN_SCALE;
+  // An example's height comes from its content, so only a screen's adds one: example keys are what they were.
+  const height = input.size === undefined ? [] : [String(input.size.height)];
+  for (const part of [input.exampleHtml, input.tokensCss, input.fontsCss, input.scheme, String(width), String(scale), String(LIVING_EXAMPLE_GENERATOR_VERSION), ...height]) {
     const bytes = Buffer.from(part, 'utf8');
     hash.update(`${bytes.length}:`).update(bytes);
   }
@@ -125,6 +140,21 @@ export const planExampleShots = (
     }
   }
   return out;
+};
+
+/**
+ * One screen at one viewport, light. The screen is a whole document with its own tokens and fonts, so
+ * the shell adds only the colour scheme and holds animations still.
+ */
+export const planScreenShot = (component: string, html: string, viewport: Pick<Viewport, 'width' | 'height'>): PlannedShot => {
+  const size = { width: viewport.width, height: viewport.height };
+  return {
+    component,
+    scheme: 'light',
+    key: exampleCacheKey({ exampleHtml: html, tokensCss: '', fontsCss: '', scheme: 'light', size }),
+    html: exampleShellHtml(html, { tokensCss: '', fontsCss: '' }, 'light'),
+    size,
+  };
 };
 
 /** The clip height of a shot: the content height in CSS px, at least 1, at most `LIVING_EXAMPLE_HEIGHT_MAX`. */
@@ -213,7 +243,7 @@ const openPage = async (session: CdpSession, serving: { current: Serving | null 
 
 const shoot = async (session: CdpSession, page: Page, serving: { current: Serving | null }, shot: PlannedShot, counter: number, settleMs: number, alive: { value: boolean }): Promise<Buffer> => {
   // The counter keeps every URL unique; `pattern:nav` keys read as `pattern-nav` in the path.
-  const url = `${DOCUMENT_ORIGIN}/living/${counter}/${shot.component.replace(':', '-')}-${shot.scheme}.html`;
+  const url = `${DOCUMENT_ORIGIN}/living/${counter}/${shot.component.replace(/[:@]/g, '-')}-${shot.scheme}.html`;
   serving.current = { url, html: Buffer.from(shot.html, 'utf8'), served: false };
   let loaded: () => void = () => undefined;
   const loadFired = new Promise<void>((resolve) => {
@@ -233,7 +263,9 @@ const shoot = async (session: CdpSession, page: Page, serving: { current: Servin
         { name: 'prefers-reduced-motion', value: 'reduce' },
       ],
     });
-    await page.send('Emulation.setDeviceMetricsOverride', { width: LIVING_EXAMPLE_WIDTH, height: VIEWPORT_HEIGHT, deviceScaleFactor: LIVING_EXAMPLE_SCALE, mobile: false });
+    const width = shot.size?.width ?? LIVING_EXAMPLE_WIDTH;
+    const scale = shot.size === undefined ? LIVING_EXAMPLE_SCALE : LIVING_SCREEN_SCALE;
+    await page.send('Emulation.setDeviceMetricsOverride', { width, height: shot.size?.height ?? VIEWPORT_HEIGHT, deviceScaleFactor: scale, mobile: false });
     const navigation = await page.send<{ errorText?: string }>('Page.navigate', { url });
     guard();
     if (navigation.errorText) throw new CdpError('Page.navigate', navigation.errorText);
@@ -241,14 +273,18 @@ const shoot = async (session: CdpSession, page: Page, serving: { current: Servin
     guard();
     if (settleMs > 0) await delay(settleMs);
     guard();
-    // The height from the browser's own layout, never from page script.
-    const metrics = await page.send<{ cssContentSize?: { height?: unknown }; contentSize?: { height?: unknown } }>('Page.getLayoutMetrics');
-    guard();
-    const height = clipHeightOf(metrics);
+    // A screen is its viewport, as its artboard shows it; an example is as tall as its content,
+    // the height taken from the browser's own layout, never from page script.
+    let height = shot.size?.height;
+    if (height === undefined) {
+      const metrics = await page.send<{ cssContentSize?: { height?: unknown }; contentSize?: { height?: unknown } }>('Page.getLayoutMetrics');
+      guard();
+      height = clipHeightOf(metrics);
+    }
     const shotResult = await page.send<{ data?: unknown }>('Page.captureScreenshot', {
       format: 'png',
       captureBeyondViewport: true,
-      clip: { x: 0, y: 0, width: LIVING_EXAMPLE_WIDTH, height, scale: 1 },
+      clip: { x: 0, y: 0, width, height, scale: 1 },
     });
     guard();
     if (typeof shotResult.data !== 'string') throw new CdpError('Page.captureScreenshot', 'no picture');
@@ -436,6 +472,46 @@ const pruneCache = async (ctx: ServiceContext, id: string, dir: string, used: re
   }
 };
 
+// ---- the screens ----
+
+/**
+ * One listed screen's document, bundled from the system's own files (contained: no escape, no link
+ * out) as the screens route reads it: within `SYSTEM_SCREEN_MAX` characters, bundled from exactly
+ * those bytes. Export mode, so no bridge. Null when it can't be read or bundled.
+ */
+const screenDocument = async (source: FileSource, id: string): Promise<string | null> => {
+  const rel = systemScreenFileOf(id);
+  const file = await source.read(rel).catch((error: unknown) => {
+    if (error instanceof RefBlocked) return null;
+    throw error;
+  });
+  if (file === null) return null;
+  const text = file.bytes.toString('utf8');
+  if (text.length > SYSTEM_SCREEN_MAX) return null;
+  try {
+    return (await bundleDocument(overlaySource(source, text, rel), rel, { mode: 'export' })).html;
+  } catch (error) {
+    if (!(error instanceof BundleTooLarge || error instanceof BundleMissingEntry)) throw error;
+    return null;
+  }
+};
+
+/** Every listed screen at each of its viewports: the shots to draw, and the keys of those that can't be. */
+const screenShots = async (detail: SystemDetail, source: FileSource): Promise<{ shots: PlannedShot[]; failed: string[] }> => {
+  const shots: PlannedShot[] = [];
+  const failed: string[] = [];
+  for (const screen of detail.screens.slice(0, SYSTEM_SCREENS_MAX)) {
+    if (!SYSTEM_ENTRY_ID_PATTERN.test(screen.id)) continue;
+    const html = screen.problem === null ? await screenDocument(source, screen.id) : null;
+    for (const viewport of (screen.viewports ?? detail.viewports).slice(0, VIEWPORTS_MAX)) {
+      const key = screenShotKey(screen.id, viewport.id);
+      if (html === null) failed.push(key);
+      else shots.push(planScreenShot(key, html, viewport));
+    }
+  }
+  return { shots, failed };
+};
+
 // ---- the entry point ----
 
 const configured = new WeakMap<ServiceContext, ExampleDeps>();
@@ -458,7 +534,8 @@ const defaultOpenBrowser = (ctx: ServiceContext, systemDir: string, workDirs: st
 };
 
 /**
- * Every example of `detail` as a picture per scheme (§5.11). `source` reads the system's files (the
+ * Every example of `detail` as a picture per scheme (§5.11), then every screen as one light picture per
+ * viewport. `source` reads the system's files (the
  * snapshot, or the proposal); `systemDir` holds the cache. Never throws for a browser problem: a
  * missing browser makes every uncached shot `no-browser`, a failing one `render-failed`.
  */
@@ -488,7 +565,9 @@ export const renderExamplePngs = async (
   }
   const tokens = await options.source.read('tokens.css').catch(() => null);
   const shell = { tokensCss: tokens?.bytes.toString('utf8') ?? '', fontsCss: await shellFontsCss(detail, options.source) };
-  const plan = planExampleShots(examples, shell, options.schemes);
+  const screens = await screenShots(detail, options.source);
+  // Screens come after the examples, so a batch that runs out of time loses screens first.
+  const plan = [...planExampleShots(examples, shell, options.schemes), ...screens.shots];
 
   const dir = plan.length > 0 ? await cacheDirOf(ctx, options.id, options.systemDir) : null;
   const pictures = new Map<string, Buffer>();
@@ -533,13 +612,15 @@ export const renderExamplePngs = async (
 
   const out: ExampleShot[] = [];
   for (const id of failed) for (const scheme of options.schemes) out.push({ component: id, scheme, png: null, width: 0, height: 0, reason: 'render-failed' });
+  for (const key of screens.failed) out.push({ component: key, scheme: 'light', png: null, width: 0, height: 0, reason: 'render-failed' });
   for (const shot of plan) {
     const png = pictures.get(shot.key) ?? null;
     const size = png === null ? null : pngSize(png);
+    const scale = shot.size === undefined ? {} : { scale: LIVING_SCREEN_SCALE };
     out.push(
       png !== null && size !== null
-        ? { component: shot.component, scheme: shot.scheme, png, width: size.width, height: size.height, reason: null }
-        : { component: shot.component, scheme: shot.scheme, png: null, width: 0, height: 0, reason: reasons.get(shot.key) ?? 'render-failed' },
+        ? { component: shot.component, scheme: shot.scheme, png, width: size.width, height: size.height, reason: null, ...scale }
+        : { component: shot.component, scheme: shot.scheme, png: null, width: 0, height: 0, reason: reasons.get(shot.key) ?? 'render-failed', ...scale },
     );
   }
   return out;

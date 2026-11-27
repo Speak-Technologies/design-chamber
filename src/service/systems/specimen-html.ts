@@ -71,6 +71,8 @@ export type SpecimenOptions = {
   tinted?: ReadonlySet<string>;
   /** A page with no `<svg>` element and nothing to hover (the living page): curves as pictures, no motion demo. */
   still?: boolean;
+  /** The system screens of an area, after its entries ('' for none). The living page pictures them; the board draws none. */
+  screens?: (area: 'patterns' | 'brand') => string;
   /** The example part of a card, called only for an entry that names an example. Absent → no example part. */
   example?: (entry: ExampleEntry) => string;
   /**
@@ -755,9 +757,9 @@ const entryTextRuns = (kind: 'pattern' | 'brand', detail: SystemDetail, entries:
     })
     .join('');
 
-const patternsParts = (detail: SystemDetail, markdown: MarkdownProfile, example: SpecimenOptions['example']): SectionParts => ({
+const patternsParts = (detail: SystemDetail, markdown: MarkdownProfile, example: SpecimenOptions['example'], screens: string): SectionParts => ({
   title: 'Patterns & voice',
-  body: entryTextRuns('pattern', detail, detail.patterns, 'Patterns & voice', markdown, example),
+  body: entryTextRuns('pattern', detail, detail.patterns, 'Patterns & voice', markdown, example) + screens,
   empty: 'No patterns or voice guidance yet.',
 });
 
@@ -775,10 +777,11 @@ const logoCard = (logo: LogoAsset, index: number, unusable: ReadonlySet<string>)
   );
 };
 
-const brandParts = (detail: SystemDetail, unusable: ReadonlySet<string>, markdown: MarkdownProfile, example: SpecimenOptions['example']): SectionParts => {
+const brandParts = (detail: SystemDetail, unusable: ReadonlySet<string>, markdown: MarkdownProfile, example: SpecimenOptions['example'], screens: string): SectionParts => {
   const parts: string[] = [];
   const entries = entryTextRuns('brand', detail, detail.brand, 'Brand & marketing', markdown, example);
   if (entries !== '') parts.push(entries);
+  if (screens !== '') parts.push(screens);
   if (detail.logos.length > 0) parts.push(`<h3>Logos</h3><div class="dc-grid">${detail.logos.map((logo, index) => logoCard(logo, index, unusable)).join('')}</div>`);
   return { title: 'Brand & marketing', body: parts.join(''), empty: 'No brand guidance or logos yet.' };
 };
@@ -930,9 +933,9 @@ const partsOf = (detail: SystemDetail, section: SystemSection, options: Specimen
     case 'components':
       return componentsParts(detail, options.example);
     case 'patterns':
-      return patternsParts(detail, markdown, options.example);
+      return patternsParts(detail, markdown, options.example, options.screens?.('patterns') ?? '');
     case 'brand':
-      return brandParts(detail, unusable, markdown, options.example);
+      return brandParts(detail, unusable, markdown, options.example, options.screens?.('brand') ?? '');
     case 'assets':
       return assetsParts(detail, unusable, styled, options.tinted ?? new Set<string>());
   }
